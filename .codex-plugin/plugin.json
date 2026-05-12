@@ -1,0 +1,33 @@
+{
+  "name": "codex-claude-loop",
+  "version": "0.1.0",
+  "description": "A Windows-first Codex plugin for Codex-led planning, Claude execution, review loops, and reusable Claude sessions.",
+  "author": {
+    "name": "local"
+  },
+  "keywords": [
+    "codex",
+    "claude",
+    "delegation",
+    "planning",
+    "review",
+    "session-pool"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Claude Loop",
+    "shortDescription": "Codex plans and reviews while Claude executes through a constrained child-thread loop.",
+    "longDescription": "Provides a Codex-led plan-review-implementation-rework workflow with a Windows delegate runtime, child-thread enforcement, reusable Claude sessions, parallel pools, audit artifacts, scoped diffs, and bounded review loops.",
+    "developerName": "local",
+    "category": "Development",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use codex-claude-loop to plan, ask Claude to review, then delegate implementation.",
+      "Run the Codex-Claude loop with scoped files and bounded rework.",
+      "Review the latest Claude delegate artifacts and decide accept or rework."
+    ]
+  }
+}
