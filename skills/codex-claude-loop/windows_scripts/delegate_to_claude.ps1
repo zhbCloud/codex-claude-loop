@@ -2,7 +2,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$TaskFile,
 
-  [ValidateSet("plan-review", "implementation", "rework")]
+  [ValidateSet("implementation", "rework")]
   [string]$TaskMode = "implementation",
 
   [ValidateSet("PrimaryReuse", "PrimaryAnchor", "ParallelPool")]

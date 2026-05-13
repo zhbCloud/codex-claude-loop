@@ -2,13 +2,13 @@
 
 [中文说明](./README-ZH.md)
 
-Codex Claude Loop is a **Windows-only Codex plugin** for a strict planning, delegation, implementation, and review workflow:
+Codex Claude Loop is a **Windows-only Codex plugin** for a strict Codex-led planning, delegation, implementation, rework, and acceptance workflow:
 
 ```text
 Codex main thread -> Codex child agent -> plugin delegate runtime -> Claude CLI
 ```
 
-Codex owns requirement analysis, planning, final review, risk judgment, and acceptance. Claude only reviews plans and implements approved work after a Codex child agent invokes the plugin delegate runtime.
+Codex owns requirement analysis, planning, task decomposition, scheduling, risk judgment, code review, and final acceptance. Claude Code only acts as the implementation layer inside a Codex child agent, executing approved Codex tasks such as writing code, editing files, running specified validation commands, and applying Codex-requested rework.
 
 ## Important Limitations
 
@@ -20,7 +20,7 @@ Codex owns requirement analysis, planning, final review, risk judgment, and acce
 
 ## What It Provides
 
-- Fixed workflow states: `DraftPlan`, `ReviewPlan`, `RevisePlan`, `Approved`, `Implement`, `CodexReview`, `Rework`, `Accepted`, `Rejected`.
+- Fixed workflow states: `DraftPlan`, `Approved`, `Implement`, `CodexReview`, `Rework`, `Accepted`, `Rejected`.
 - Hard child-thread marker: `CODEX_CLAUDE_LOOP_CHILD_THREAD=1`.
 - Direct main-thread delegate invocation is rejected.
 - Reusable Claude sessions with `PrimaryReuse`, `PrimaryAnchor`, and `ParallelPool`.
@@ -28,7 +28,7 @@ Codex owns requirement analysis, planning, final review, risk judgment, and acce
 - Audit artifacts under `.codex/codex_claude_loop/`.
 - Structured Claude reports with required headings.
 - Allowed-path diff checks when the target project is a Git repository.
-- Default bounded loops: plan review up to 3 rounds, implementation rework up to 2 rounds.
+- Default bounded loop: implementation rework up to 2 rounds.
 
 ## Windows Delegate Example
 
@@ -37,8 +37,8 @@ The delegate entrypoint is intended to be run by a Codex child agent, not by the
 ```powershell
 $env:CODEX_CLAUDE_LOOP_CHILD_THREAD = '1'
 pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\delegate_to_claude.ps1 `
-  -TaskFile .\.codex\codex_claude_loop\tasks\20260512\001-plan-review.md `
-  -TaskMode plan-review `
+  -TaskFile .\.codex\codex_claude_loop\tasks\20260512\001-implementation.md `
+  -TaskMode implementation `
   -SessionMode PrimaryReuse `
   -SessionKey my-feature-loop `
   -AllowedPath src `
@@ -113,16 +113,18 @@ codex plugin marketplace add <your-github-repository-url>
 Example:
 
 ```powershell
-codex plugin marketplace add https://github.com/<owner>/codex-claude-loop
+codex plugin marketplace add https://github.com/zhbCloud/codex-claude-loop.git
 ```
 
-#### 2. Install the Plugin in Codex
+#### 2. Install the Plugin in Codex App or Codex Interactive TUI
 
-Open Codex and run:
+Open Codex App, or run `codex` in your terminal to enter the interactive TUI. Then type this slash command inside Codex:
 
 ```text
 /plugin install codex-claude-loop@<marketplace-name> --scope user
 ```
+
+This is not a PowerShell command. It must be entered in the Codex App chat box or the Codex interactive TUI.
 
 If your marketplace name matches the repository name, the command is usually:
 
@@ -139,7 +141,7 @@ After installation, restart Codex or refresh the plugin list.
 Send a prompt like this in Codex:
 
 ```text
-Use codex-claude-loop so Codex drafts the plan first, then delegates execution to Claude through a child agent.
+Use codex-claude-loop so Codex drafts and approves the plan first, then delegates only the implementation work to Claude Code through a child agent.
 ```
 
 If the plugin is active, Codex should recognize the `codex-claude-loop` skill and follow this chain:
@@ -156,7 +158,7 @@ If you do not want to install it manually, give Codex this prompt:
 Please install and enable this Windows-only Codex plugin:
 
 GitHub repository:
-https://github.com/<owner>/codex-claude-loop
+https://github.com/zhbCloud/codex-claude-loop.git
 
 Requirements:
 1. First check whether Codex CLI is installed on my machine.
@@ -174,30 +176,131 @@ Codex may ask for confirmation before it changes `~/.codex/config.toml`, downloa
 
 ## Usage
 
-After installation, trigger the workflow with a prompt like this:
+Copy a prompt and replace the `<...>` placeholders with your real task details.
+
+### Fix a Bug
+
+Short version:
 
 ```text
-Use the codex-claude-loop workflow for this task. Codex should draft the plan first, Claude should review the plan, Claude should implement only after the plan is approved, and Codex should perform the final review.
+Use codex-claude-loop to fix this bug: <describe the bug>
 ```
 
-For bug fixes, you can be more specific:
+With constraints:
 
 ```text
-Use codex-claude-loop to fix this bug.
+Use codex-claude-loop to fix this bug: <describe the bug>
 
 Requirements:
-1. Codex analyzes the issue and writes the repair plan first.
-2. Claude only reviews the plan and performs implementation.
-3. Codex checks the final diff, verification result, and risks.
-4. If the review fails, enter the rework loop.
+- Codex analyzes the issue and approves the repair plan.
+- Claude Code only implements the approved fix.
+- Codex reviews the final diff and validation result.
+```
+
+### Build a Feature
+
+Short version:
+
+```text
+Use codex-claude-loop to implement this feature: <describe the feature>
+```
+
+With constraints:
+
+```text
+Use codex-claude-loop to implement this feature: <describe the feature>
+
+Requirements:
+- Codex defines scope and acceptance criteria first.
+- Claude Code only writes approved code changes.
+- Codex reviews the final diff, validation result, and risks.
+```
+
+### Refactor a Module
+
+Short version:
+
+```text
+Use codex-claude-loop to refactor this module: <module or file path>
+```
+
+With constraints:
+
+```text
+Use codex-claude-loop to refactor this module: <module or file path>
+
+Requirements:
+- Keep existing behavior unchanged.
+- Limit edits to the specified module or files.
+- Codex reviews the final diff before acceptance.
+```
+
+### Fix Build or Test Failures
+
+Short version:
+
+```text
+Use codex-claude-loop to fix these build or test failures: <paste error or failing command>
+```
+
+With constraints:
+
+```text
+Use codex-claude-loop to fix these build or test failures: <paste error or failing command>
+
+Requirements:
+- Codex identifies the likely cause first.
+- Claude Code only implements the approved fix.
+- Codex checks that the requested validation passes.
+```
+
+### Work Within a File Scope
+
+Short version:
+
+```text
+Use codex-claude-loop for this task: <describe the task>. Only modify these files: <file-list>.
+```
+
+With constraints:
+
+```text
+Use codex-claude-loop for this task: <describe the task>
+
+Allowed files:
+- <file path 1>
+- <file path 2>
+
+Requirements:
+- Claude Code must stay inside the allowed file scope.
+- Codex rejects changes outside the scope.
+```
+
+### Rework a Previous Attempt
+
+Short version:
+
+```text
+Use codex-claude-loop to rework the previous implementation: <describe what must be fixed>
+```
+
+With constraints:
+
+```text
+Use codex-claude-loop to rework the previous implementation: <describe what must be fixed>
+
+Requirements:
+- Codex lists the rejection findings first.
+- Claude Code only fixes those findings.
+- Codex reviews the rework before acceptance.
 ```
 
 ## Marketplace Note
 
-Before publishing this repository publicly, make sure it includes a marketplace index such as:
+This repository includes a marketplace index:
 
 ```text
 .agents/plugins/marketplace.json
 ```
 
-Without a marketplace index, users may be able to clone the source, but `codex plugin marketplace add <repo>` may not discover `codex-claude-loop` as an installable plugin.
+The marketplace entry points to this repository root because `.codex-plugin/plugin.json` lives at the root of the repository.

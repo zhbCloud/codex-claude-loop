@@ -1,6 +1,6 @@
 # Codex Claude Loop Contract
 
-This document defines the Codex-led, Claude-executed workflow.
+This document defines the Codex-led, Claude Code implementation workflow.
 
 ## Invocation Boundary
 
@@ -24,10 +24,8 @@ The Codex main thread must not invoke `claude` directly. The Codex main thread m
 
 Codex main thread:
 
-- Owns requirements, scope, planning, acceptance, rejection, and final delivery.
-- Writes the first plan.
-- Reviews Claude's plan critique.
-- Revises the plan when feedback is valid.
+- Owns requirements, scope, planning, task decomposition, scheduling, risk judgment, acceptance, rejection, and final delivery.
+- Writes and approves the plan before delegation.
 - Reviews Claude's implementation diff and verification.
 - Makes the final accept/reject decision.
 
@@ -40,8 +38,7 @@ Codex child thread:
 
 Claude CLI:
 
-- Reviews plans.
-- Implements approved plans.
+- Implements approved Codex plans.
 - Performs bounded rework.
 - Runs or reports validation commands.
 - Produces structured reports.
@@ -52,8 +49,7 @@ Claude CLI:
 Allowed states:
 
 ```text
-DraftPlan -> ReviewPlan -> RevisePlan -> ReviewPlan
-ReviewPlan -> Approved
+DraftPlan -> Approved
 Approved -> Implement
 Implement -> CodexReview
 CodexReview -> Rework
@@ -68,7 +64,6 @@ Invalid transitions are rejected by the runtime helper module and should be trea
 
 Defaults:
 
-- Plan review rounds: 3
 - Implementation rework rounds: 2
 - Parallel workers: 3
 
@@ -80,7 +75,7 @@ If a limit is hit, Codex main thread must stop automatic looping and decide whet
 
 - Default serial mode.
 - Reuses the primary Claude session for the same `SessionKey`.
-- Best for plan review, approved implementation, and follow-up rework on the same feature.
+- Best for approved implementation and follow-up rework on the same feature.
 
 `PrimaryAnchor`:
 

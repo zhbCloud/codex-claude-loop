@@ -4,9 +4,7 @@ from .common import DelegateError
 
 
 ALLOWED_TRANSITIONS = {
-    "DraftPlan": {"ReviewPlan"},
-    "ReviewPlan": {"RevisePlan", "Approved"},
-    "RevisePlan": {"ReviewPlan"},
+    "DraftPlan": {"Approved"},
     "Approved": {"Implement"},
     "Implement": {"CodexReview"},
     "CodexReview": {"Rework", "Accepted", "Rejected"},
@@ -17,7 +15,6 @@ ALLOWED_TRANSITIONS = {
 
 
 TASK_MODE_TARGET_STATE = {
-    "plan-review": "ReviewPlan",
     "implementation": "Implement",
     "rework": "Rework",
 }

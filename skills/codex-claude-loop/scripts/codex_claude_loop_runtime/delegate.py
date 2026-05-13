@@ -305,7 +305,7 @@ def run(ns: argparse.Namespace) -> int:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Codex Claude Loop delegate runtime")
     p.add_argument("--task-file", required=True)
-    p.add_argument("--task-mode", choices=["plan-review", "implementation", "rework"], default="implementation")
+    p.add_argument("--task-mode", choices=["implementation", "rework"], default="implementation")
     p.add_argument("--session-mode", choices=["PrimaryReuse", "PrimaryAnchor", "ParallelPool"], default="PrimaryReuse")
     p.add_argument("--session-key", default="")
     p.add_argument("--allowed-path", action="append", default=[])
@@ -331,4 +331,3 @@ def main(argv: list[str] | None = None) -> int:
     except DelegateError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-
