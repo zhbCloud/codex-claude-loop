@@ -14,7 +14,7 @@ Codex owns requirement analysis, planning, task decomposition, scheduling, risk 
 
 - This plugin currently targets Windows only.
 - PowerShell 7+ is recommended.
-- Delegate scripts live under `skills/codex-claude-loop/windows_scripts/`.
+- Delegate scripts live under `plugins/codex-claude-loop/skills/codex-claude-loop/windows_scripts/`.
 - macOS and Linux delegate scripts are not provided.
 - Claude CLI must be installed and logged in if you want the runtime to actually call Claude.
 
@@ -36,7 +36,7 @@ The delegate entrypoint is intended to be run by a Codex child agent, not by the
 
 ```powershell
 $env:CODEX_CLAUDE_LOOP_CHILD_THREAD = '1'
-pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\delegate_to_claude.ps1 `
+pwsh -NoProfile -File .\plugins\codex-claude-loop\skills\codex-claude-loop\windows_scripts\delegate_to_claude.ps1 `
   -TaskFile .\.codex\codex_claude_loop\tasks\20260512\001-implementation.md `
   -TaskMode implementation `
   -SessionMode PrimaryReuse `
@@ -69,20 +69,44 @@ Default artifact root:
 Check one run:
 
 ```powershell
-pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\verify_artifacts.ps1 -RunId <run_id>
+pwsh -NoProfile -File .\plugins\codex-claude-loop\skills\codex-claude-loop\windows_scripts\verify_artifacts.ps1 -RunId <run_id>
 ```
 
 Check the latest run:
 
 ```powershell
-pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\verify_artifacts.ps1
+pwsh -NoProfile -File .\plugins\codex-claude-loop\skills\codex-claude-loop\windows_scripts\verify_artifacts.ps1
 ```
 
 ## Installation
 
-This repository is intended to be distributed as a Codex plugin. Users can install it manually, or ask Codex AI to inspect the repository and perform the installation.
+This repository is intended to be distributed as a Codex plugin marketplace. The marketplace file lives at `.agents/plugins/marketplace.json`, and the actual plugin lives under `plugins/codex-claude-loop/`. The recommended path is to ask Codex AI to inspect the repository and perform the installation; you can also install it manually.
 
-### Method 1: Manual Installation
+### Method 1: Ask Codex AI to Install It
+
+If you do not want to install it manually, give Codex this prompt:
+
+```text
+Please install and enable this Windows-only Codex plugin:
+
+GitHub repository:
+https://github.com/zhbCloud/codex-claude-loop.git
+
+Requirements:
+1. First check whether Codex CLI is installed on my machine.
+2. If Codex CLI is not installed, tell me how to install it.
+3. Confirm that the current system is Windows. If it is not Windows, stop the installation and explain why.
+4. Check whether this repository is a valid Codex marketplace and confirm that plugins/codex-claude-loop/.codex-plugin/plugin.json exists.
+5. Add this repository as a Codex plugin marketplace.
+6. Install the codex-claude-loop plugin with user scope.
+7. After installation, tell me whether I need to restart Codex.
+8. Do not modify my project business code.
+9. If any step fails, stop and explain the reason. Do not fall back to copying the skill directory manually.
+```
+
+Codex may ask for confirmation before it changes `~/.codex/config.toml`, downloads marketplace data, or writes plugin cache files.
+
+### Method 2: Manual Installation
 
 #### Requirements
 
@@ -107,30 +131,56 @@ npm i -g @openai/codex
 #### 1. Add the Plugin Marketplace
 
 ```powershell
-codex plugin marketplace add <your-github-repository-url>
-```
-
-Example:
-
-```powershell
 codex plugin marketplace add https://github.com/zhbCloud/codex-claude-loop.git
 ```
 
-#### 2. Install the Plugin in Codex App or Codex Interactive TUI
+#### 2. Install the Plugin from Codex
 
-Open Codex App, or run `codex` in your terminal to enter the interactive TUI. Then type this slash command inside Codex:
+Open Codex Desktop and use the plugin list or plugin install flow to install `codex-claude-loop@codex-claude-loop` with user scope.
+
+If your Codex CLI build exposes plugin slash commands, you can also run this PowerShell command in your terminal to open the Codex CLI interactive interface:
+
+```powershell
+codex
+```
+
+Then type this slash command inside the Codex CLI interface:
 
 ```text
 /plugin install codex-claude-loop@<marketplace-name> --scope user
 ```
 
-This is not a PowerShell command. It must be entered in the Codex App chat box or the Codex interactive TUI.
+`/plugin install ...` is not a PowerShell command. It must be entered inside the Codex CLI interactive interface opened by `codex`. If your Codex build does not expose this slash command, use the Codex Desktop plugin install flow instead.
 
 If your marketplace name matches the repository name, the command is usually:
 
 ```text
 /plugin install codex-claude-loop@codex-claude-loop --scope user
 ```
+
+#### Troubleshooting: Local Plugin Path Format
+
+If installation reports an error like one of these:
+
+```text
+local plugin source path must start with `./`
+local plugin source path must not be empty
+local plugin source path must stay within the marketplace root
+```
+
+Check the marketplace file:
+
+```text
+.agents/plugins/marketplace.json
+```
+
+The local plugin source path must point to the plugin subdirectory inside this marketplace:
+
+```json
+"path": "./plugins/codex-claude-loop"
+```
+
+Do not use `"path": "./"` for this repository. Codex treats the marketplace root and the plugin root as separate concepts, so the plugin must live in a non-empty child directory such as `plugins/codex-claude-loop/`.
 
 #### 3. Restart or Refresh Codex
 
@@ -149,30 +199,6 @@ If the plugin is active, Codex should recognize the `codex-claude-loop` skill an
 ```text
 Codex main thread -> Codex child agent -> codex-claude-loop delegate runtime -> Claude CLI
 ```
-
-### Method 2: Ask Codex AI to Install It
-
-If you do not want to install it manually, give Codex this prompt:
-
-```text
-Please install and enable this Windows-only Codex plugin:
-
-GitHub repository:
-https://github.com/zhbCloud/codex-claude-loop.git
-
-Requirements:
-1. First check whether Codex CLI is installed on my machine.
-2. If Codex CLI is not installed, tell me how to install it.
-3. Confirm that the current system is Windows. If it is not Windows, stop the installation and explain why.
-4. Check whether this repository is a valid Codex plugin and confirm that .codex-plugin/plugin.json exists.
-5. Add this repository as a Codex plugin marketplace.
-6. Install the codex-claude-loop plugin with user scope.
-7. After installation, tell me whether I need to restart Codex.
-8. Do not modify my project business code.
-9. If any step fails, stop and explain the reason. Do not fall back to copying the skill directory manually.
-```
-
-Codex may ask for confirmation before it changes `~/.codex/config.toml`, downloads marketplace data, or writes plugin cache files.
 
 ## Usage
 
@@ -303,4 +329,14 @@ This repository includes a marketplace index:
 .agents/plugins/marketplace.json
 ```
 
-The marketplace entry points to this repository root because `.codex-plugin/plugin.json` lives at the root of the repository.
+The marketplace entry points to the plugin subdirectory:
+
+```text
+plugins/codex-claude-loop/
+```
+
+The plugin manifest lives at:
+
+```text
+plugins/codex-claude-loop/.codex-plugin/plugin.json
+```
