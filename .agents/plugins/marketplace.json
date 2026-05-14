@@ -8,7 +8,7 @@
       "name": "codex-claude-loop",
       "source": {
         "source": "local",
-        "path": "./"
+        "path": "./plugins/codex-claude-loop"
       },
       "policy": {
         "installation": "AVAILABLE",
