@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "sessionKey": "validation-async-clean",
+  "createdAt": "2026-05-16T05:19:56.574419Z",
+  "updatedAt": "2026-05-16T05:19:56.631419Z",
+  "primary": {
+    "sessionId": "b278dca3-fe88-4d34-9f3e-9ef3a081fae9",
+    "status": "available",
+    "leaseRunId": null,
+    "leasedAt": null,
+    "lastUsedAt": "2026-05-16T05:19:56.631419Z",
+    "lastRunId": "20260516_131956_354_e4ba2e34"
+  },
+  "parallelPool": []
+}

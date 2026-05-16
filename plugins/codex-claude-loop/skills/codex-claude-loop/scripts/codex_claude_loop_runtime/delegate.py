@@ -7,12 +7,13 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from .claude_cli import run_claude, write_startup_failure
 from .common import ARTIFACT_SCHEMA_VERSION, CHILD_MARKER_NAME, CHILD_MARKER_VALUE, DelegateError, has_required_headings, now_iso
 from .fingerprint import safe_key, task_fingerprint
-from .io_utils import ensure_writable, read_text, write_json, write_text
+from .io_utils import ensure_writable, read_json, read_text, write_json, write_text
 from .sessions import SessionLease, acquire_session, release_session
 from .state_machine import state_for_task_mode
 
@@ -132,7 +133,7 @@ Risks Or Follow-ups
 """
 
 
-def run(ns: argparse.Namespace) -> int:
+def prepare_run(ns: argparse.Namespace) -> dict[str, Any]:
     if os.environ.get(CHILD_MARKER_NAME) != CHILD_MARKER_VALUE:
         raise DelegateError(
             f"Direct delegate invocation is forbidden. Run inside a Codex child thread with {CHILD_MARKER_NAME}={CHILD_MARKER_VALUE}."
@@ -183,6 +184,7 @@ def run(ns: argparse.Namespace) -> int:
         "validationCommands": validation_commands,
         "childThreadMarkerName": CHILD_MARKER_NAME,
         "childThreadMarkerValidated": True,
+        "configPath": str(config_path),
         "promptPath": str(prompt_path),
         "outputPath": str(output_path),
         "statusPath": str(status_path),
@@ -192,17 +194,105 @@ def run(ns: argparse.Namespace) -> int:
     status: dict[str, Any] = {
         "artifactSchema": ARTIFACT_SCHEMA_VERSION,
         "runId": run_id,
+        "status": "queued" if ns.prepare_only else "starting",
+        "startedAt": now_iso(),
+        "childThreadMarkerValidated": True,
+        "exitCode": None,
+    }
+    config["runtimeOptions"] = {
+        "model": ns.model,
+        "namePrefix": ns.name_prefix,
+        "maxParallel": ns.max_parallel,
+        "leaseTtlSeconds": ns.lease_ttl_seconds,
+        "leaseWaitSeconds": ns.lease_wait_seconds,
+        "maxRetryCount": ns.max_retry_count,
+        "bypassPermissions": bool(ns.bypass_permissions),
+        "dryRun": bool(ns.dry_run),
+    }
+    write_json(config_path, config)
+    write_json(status_path, status)
+
+    return {
+        "root": root,
+        "run_id": run_id,
+        "session_key": session_key,
+        "fingerprint": fingerprint,
+        "allowed_paths": allowed_paths,
+        "validation_commands": validation_commands,
+        "prompt": prompt,
+        "config": config,
+        "output_path": output_path,
+        "config_path": config_path,
+        "status_path": status_path,
+        "prompt_path": prompt_path,
+        "stream_path": stream_path,
+        "trace_path": trace_path,
+    }
+
+
+def load_prepared_run(config_path: Path) -> tuple[SimpleNamespace, dict[str, Any]]:
+    config = read_json(config_path)
+    runtime_options = config.get("runtimeOptions") if isinstance(config.get("runtimeOptions"), dict) else {}
+    ns = SimpleNamespace(
+        task_mode=config["taskMode"],
+        session_mode=config["sessionMode"],
+        round=int(config["round"]),
+        max_round=int(config["maxRound"]),
+        max_parallel=int(runtime_options.get("maxParallel", 3)),
+        lease_ttl_seconds=int(runtime_options.get("leaseTtlSeconds", 7200)),
+        lease_wait_seconds=int(runtime_options.get("leaseWaitSeconds", 60)),
+        max_retry_count=int(runtime_options.get("maxRetryCount", 1)),
+        name_prefix=str(runtime_options.get("namePrefix", "codex-claude-loop")),
+        model=str(runtime_options.get("model", "")),
+        bypass_permissions=bool(runtime_options.get("bypassPermissions", False)),
+        dry_run=bool(runtime_options.get("dryRun", False)),
+    )
+    context = {
+        "root": Path(config["repoRoot"]),
+        "run_id": config["runId"],
+        "session_key": config["sessionKey"],
+        "fingerprint": config["fingerprint"],
+        "allowed_paths": list(config.get("allowedPaths") or []),
+        "validation_commands": list(config.get("validationCommands") or []),
+        "prompt": read_text(Path(config["promptPath"])),
+        "config": config,
+        "output_path": Path(config["outputPath"]),
+        "config_path": Path(config["configPath"]),
+        "status_path": Path(config["statusPath"]),
+        "prompt_path": Path(config["promptPath"]),
+        "stream_path": Path(config["streamPath"]),
+        "trace_path": Path(config["tracePath"]),
+    }
+    return ns, context
+
+
+def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str, Any]) -> int:
+    root = Path(context["root"])
+    run_id = str(context["run_id"])
+    session_key = str(context["session_key"])
+    fingerprint = str(context["fingerprint"])
+    allowed_paths = list(context["allowed_paths"])
+    prompt = str(context["prompt"])
+    config = dict(context["config"])
+    output_path = Path(context["output_path"])
+    config_path = Path(context["config_path"])
+    status_path = Path(context["status_path"])
+    prompt_path = Path(context["prompt_path"])
+    stream_path = Path(context["stream_path"])
+    trace_path = Path(context["trace_path"])
+    status = read_json(status_path) if status_path.exists() else {
+        "artifactSchema": ARTIFACT_SCHEMA_VERSION,
+        "runId": run_id,
         "status": "starting",
         "startedAt": now_iso(),
         "childThreadMarkerValidated": True,
         "exitCode": None,
     }
-    write_json(config_path, config)
-    write_json(status_path, status)
-
     lease: SessionLease | None = None
     exit_code = 1
     try:
+        status.update({"status": "leasing", "updatedAt": now_iso()})
+        write_json(status_path, status)
         lease = acquire_session(
             session_root(root),
             session_key,
@@ -215,6 +305,8 @@ def run(ns: argparse.Namespace) -> int:
         )
         config.update({"sessionId": lease.session_id, "resume": lease.resume, "slotName": lease.slot_name})
         write_json(config_path, config)
+        status.update({"status": "running", "updatedAt": now_iso(), "sessionId": lease.session_id, "resume": lease.resume})
+        write_json(status_path, status)
 
         if ns.dry_run:
             write_text(output_path, dry_run_report(run_id, prompt_path))
@@ -222,8 +314,6 @@ def run(ns: argparse.Namespace) -> int:
             write_text(trace_path, f"[dry-run] {run_id}\n")
             result = {"exitCode": 0, "finalText": read_text(output_path), "sawResultSuccess": True, "hasRequiredHeadings": True}
         else:
-            status.update({"status": "running", "updatedAt": now_iso()})
-            write_json(status_path, status)
             result = run_claude(
                 prompt,
                 root,
@@ -302,6 +392,32 @@ def run(ns: argparse.Namespace) -> int:
             release_session(lease, fingerprint, ns.lease_ttl_seconds)
 
 
+def run_worker(config_path: Path) -> int:
+    if os.environ.get(CHILD_MARKER_NAME) != CHILD_MARKER_VALUE:
+        raise DelegateError(
+            f"Direct delegate invocation is forbidden. Run inside a Codex child thread with {CHILD_MARKER_NAME}={CHILD_MARKER_VALUE}."
+        )
+    ns, context = load_prepared_run(config_path)
+    return execute_prepared(ns, context)
+
+
+def run(ns: argparse.Namespace) -> int:
+    context = prepare_run(ns)
+    status_path = Path(context["status_path"])
+    config_path = Path(context["config_path"])
+    status = read_json(status_path)
+
+    if ns.prepare_only:
+        print(f"RunId: {context['run_id']}")
+        print(f"Status: {status.get('status', 'queued')}")
+        print(f"ConfigPath: {config_path}")
+        print(f"Output: {context['output_path']}")
+        print(f"StatusPath: {status_path}")
+        return 0
+
+    return execute_prepared(ns, context)
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Codex Claude Loop delegate runtime")
     p.add_argument("--task-file", required=True)
@@ -321,10 +437,21 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--max-retry-count", type=int, default=1)
     p.add_argument("--bypass-permissions", action="store_true")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--prepare-only", action="store_true")
+    p.add_argument("--worker-config", default="")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if "--worker-config" in argv:
+        worker_config = argv[argv.index("--worker-config") + 1]
+        try:
+            return run_worker(Path(worker_config))
+        except DelegateError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
     ns = parser().parse_args(argv)
     try:
         return run(ns)

@@ -1,0 +1,11 @@
+{
+  "artifactSchema": 1,
+  "runId": "20260516_131403_742_427d76cc",
+  "status": "queued",
+  "startedAt": "2026-05-16T05:14:03.746532Z",
+  "childThreadMarkerValidated": true,
+  "exitCode": null,
+  "updatedAt": "2026-05-16T05:14:03.765640Z",
+  "workerPid": 18140,
+  "workerLogPath": "D:\\Desktop\\codex-claude-loop\\.codex\\codex_claude_loop\\claude-delegate\\worker_20260516_131403_742_427d76cc.log"
+}

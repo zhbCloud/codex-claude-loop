@@ -47,6 +47,22 @@ pwsh -NoProfile -File .\plugins\codex-claude-loop\skills\codex-claude-loop\windo
 
 Use `-DryRun` to generate artifacts and validate routing without invoking Claude.
 
+If the child agent should return a `RunId` first and let the Codex main thread poll `status_<run_id>.json`, add `-StartOnly`:
+
+```powershell
+$env:CODEX_CLAUDE_LOOP_CHILD_THREAD = '1'
+pwsh -NoProfile -File .\plugins\codex-claude-loop\skills\codex-claude-loop\windows_scripts\delegate_to_claude.ps1 `
+  -TaskFile .\.codex\codex_claude_loop\tasks\20260512\001-implementation.md `
+  -TaskMode implementation `
+  -SessionMode PrimaryReuse `
+  -SessionKey my-feature-loop `
+  -AllowedPath src `
+  -ValidationCommand "npm test" `
+  -StartOnly
+```
+
+`-StartOnly` creates `config_<run_id>.json`, `status_<run_id>.json`, `prompt_<run_id>.md`, and the other run artifacts, starts a background worker, then immediately prints `RunId`, `WorkerPid`, and `StatusPath`. The main thread can then read `status_<run_id>.json` until the status becomes `completed` or `failed`, and finally run `verify_artifacts.ps1 -RunId <run_id>`.
+
 ## Artifact Layout
 
 Default artifact root:

@@ -1,0 +1,32 @@
+{
+  "artifactSchema": 1,
+  "runId": "20260516_131403_742_427d76cc",
+  "repoRoot": "D:\\Desktop\\codex-claude-loop",
+  "taskFile": "D:\\Desktop\\codex-claude-loop\\README-ZH.md",
+  "taskMode": "implementation",
+  "round": 1,
+  "maxRound": 3,
+  "sessionMode": "PrimaryReuse",
+  "sessionKey": "validation-async-2",
+  "fingerprint": "387382a4e53cc793abb28e333675a8c157d577af4f2abeb1495f2ea3c62b87dd",
+  "allowedPaths": [],
+  "validationCommands": [],
+  "childThreadMarkerName": "CODEX_CLAUDE_LOOP_CHILD_THREAD",
+  "childThreadMarkerValidated": true,
+  "configPath": "D:\\Desktop\\codex-claude-loop\\.codex\\codex_claude_loop\\claude-delegate\\config_20260516_131403_742_427d76cc.json",
+  "promptPath": "D:\\Desktop\\codex-claude-loop\\.codex\\codex_claude_loop\\claude-delegate\\prompt_20260516_131403_742_427d76cc.md",
+  "outputPath": "D:\\Desktop\\codex-claude-loop\\.codex\\codex_claude_loop\\claude-delegate\\claude_20260516_131403_742_427d76cc.md",
+  "statusPath": "D:\\Desktop\\codex-claude-loop\\.codex\\codex_claude_loop\\claude-delegate\\status_20260516_131403_742_427d76cc.json",
+  "streamPath": "D:\\Desktop\\codex-claude-loop\\.codex\\codex_claude_loop\\claude-delegate\\stream_20260516_131403_742_427d76cc.jsonl",
+  "tracePath": "D:\\Desktop\\codex-claude-loop\\.codex\\codex_claude_loop\\claude-delegate\\trace_20260516_131403_742_427d76cc.log",
+  "runtimeOptions": {
+    "model": "",
+    "namePrefix": "codex-claude-loop",
+    "maxParallel": 3,
+    "leaseTtlSeconds": 7200,
+    "leaseWaitSeconds": 60,
+    "maxRetryCount": 1,
+    "bypassPermissions": false,
+    "dryRun": true
+  }
+}

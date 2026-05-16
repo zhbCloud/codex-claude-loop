@@ -21,7 +21,8 @@ param(
   [int]$LeaseWaitSeconds = 60,
   [int]$MaxRetryCount = 1,
   [switch]$BypassPermissions,
-  [switch]$DryRun
+  [switch]$DryRun,
+  [switch]$StartOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +49,7 @@ function Resolve-Python {
   throw "Python was not found. Install Python 3 or set the PYTHON environment variable."
 }
 
-$pythonCommand = Resolve-Python
+$pythonCommand = @(Resolve-Python)
 $runtimeArgs = @(
   $pythonScript,
   "--task-file", $TaskFile,
@@ -84,10 +85,68 @@ if ($BypassPermissions) {
 if ($DryRun) {
   $runtimeArgs += "--dry-run"
 }
+if ($StartOnly) {
+  $runtimeArgs += "--prepare-only"
+}
 
+$pythonExe = $pythonCommand[0]
+$pythonPrefixArgs = @()
 if ($pythonCommand.Count -gt 1) {
-  & $pythonCommand[0] @($pythonCommand[1..($pythonCommand.Count - 1)]) @runtimeArgs
+  $pythonPrefixArgs = @($pythonCommand[1..($pythonCommand.Count - 1)])
+}
+
+if ($StartOnly) {
+  $capturedOutput = & $pythonExe @pythonPrefixArgs @runtimeArgs 2>&1
+  $prepareExitCode = $LASTEXITCODE
+  foreach ($line in $capturedOutput) {
+    Write-Output $line
+  }
+  if ($prepareExitCode -ne 0) {
+    exit $prepareExitCode
+  }
+
+  $configPath = ""
+  $statusPath = ""
+  foreach ($line in $capturedOutput) {
+    $text = [string]$line
+    if ($text -match '^ConfigPath:\s*(.+)$') {
+      $configPath = $Matches[1].Trim()
+    }
+    if ($text -match '^StatusPath:\s*(.+)$') {
+      $statusPath = $Matches[1].Trim()
+    }
+  }
+  if (-not $configPath) {
+    throw "Delegate prepare step did not return ConfigPath."
+  }
+
+  $configName = [System.IO.Path]::GetFileNameWithoutExtension($configPath)
+  $runId = $configName.Substring("config_".Length)
+  $artifactDir = Split-Path -Parent $configPath
+  $workerLog = Join-Path $artifactDir "worker_$runId.log"
+  $workerErrLog = Join-Path $artifactDir "worker_$runId.err.log"
+  $workerArgs = @()
+  $workerArgs += $pythonPrefixArgs
+  $workerArgs += @($pythonScript, "--worker-config", $configPath)
+  $process = Start-Process -FilePath $pythonExe -ArgumentList $workerArgs -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -PassThru -RedirectStandardOutput $workerLog -RedirectStandardError $workerErrLog
+
+  if ($statusPath -and (Test-Path -LiteralPath $statusPath)) {
+    $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+    $status | Add-Member -NotePropertyName workerPid -NotePropertyValue $process.Id -Force
+    $status | Add-Member -NotePropertyName workerLogPath -NotePropertyValue $workerLog -Force
+    $status | Add-Member -NotePropertyName workerErrorLogPath -NotePropertyValue $workerErrLog -Force
+    $status | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $statusPath -Encoding utf8
+  }
+
+  Write-Output "WorkerPid: $($process.Id)"
+  Write-Output "WorkerLog: $workerLog"
+  Write-Output "WorkerErrorLog: $workerErrLog"
+  exit 0
+}
+
+if ($pythonPrefixArgs.Count -gt 0) {
+  & $pythonExe @pythonPrefixArgs @runtimeArgs
 } else {
-  & $pythonCommand[0] @runtimeArgs
+  & $pythonExe @runtimeArgs
 }
 exit $LASTEXITCODE

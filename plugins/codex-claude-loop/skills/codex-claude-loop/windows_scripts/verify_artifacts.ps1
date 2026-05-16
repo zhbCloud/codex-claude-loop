@@ -27,7 +27,7 @@ function Resolve-Python {
   throw "Python was not found. Install Python 3 or set the PYTHON environment variable."
 }
 
-$pythonCommand = Resolve-Python
+$pythonCommand = @(Resolve-Python)
 $runtimeArgs = @($pythonScript)
 if ($RunId) {
   $runtimeArgs += @("--run-id", $RunId)
@@ -36,9 +36,11 @@ if ($ArtifactRoot) {
   $runtimeArgs += @("--artifact-root", $ArtifactRoot)
 }
 
+$pythonExe = $pythonCommand[0]
 if ($pythonCommand.Count -gt 1) {
-  & $pythonCommand[0] @($pythonCommand[1..($pythonCommand.Count - 1)]) @runtimeArgs
+  $pythonPrefixArgs = @($pythonCommand[1..($pythonCommand.Count - 1)])
+  & $pythonExe @pythonPrefixArgs @runtimeArgs
 } else {
-  & $pythonCommand[0] @runtimeArgs
+  & $pythonExe @runtimeArgs
 }
 exit $LASTEXITCODE
