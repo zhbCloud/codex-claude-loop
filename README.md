@@ -30,70 +30,6 @@ Codex owns requirement analysis, planning, task decomposition, scheduling, risk 
 - Allowed-path diff checks when the target project is a Git repository.
 - Default bounded loop: implementation rework up to 2 rounds.
 
-## Windows Delegate Example
-
-The delegate entrypoint is intended to be run by a Codex child agent, not by the Codex main thread:
-
-```powershell
-$env:CODEX_CLAUDE_LOOP_CHILD_THREAD = '1'
-pwsh -NoProfile -File .\plugins\codex-claude-loop\skills\codex-claude-loop\windows_scripts\delegate_to_claude.ps1 `
-  -TaskFile .\.codex\codex_claude_loop\tasks\20260512\001-implementation.md `
-  -TaskMode implementation `
-  -SessionMode PrimaryReuse `
-  -SessionKey my-feature-loop `
-  -AllowedPath src `
-  -ValidationCommand "npm test"
-```
-
-Use `-DryRun` to generate artifacts and validate routing without invoking Claude.
-
-If the child agent should return a `RunId` first and let the Codex main thread poll `status_<run_id>.json`, add `-StartOnly`:
-
-```powershell
-$env:CODEX_CLAUDE_LOOP_CHILD_THREAD = '1'
-pwsh -NoProfile -File .\plugins\codex-claude-loop\skills\codex-claude-loop\windows_scripts\delegate_to_claude.ps1 `
-  -TaskFile .\.codex\codex_claude_loop\tasks\20260512\001-implementation.md `
-  -TaskMode implementation `
-  -SessionMode PrimaryReuse `
-  -SessionKey my-feature-loop `
-  -AllowedPath src `
-  -ValidationCommand "npm test" `
-  -StartOnly
-```
-
-`-StartOnly` creates `config_<run_id>.json`, `status_<run_id>.json`, `prompt_<run_id>.md`, and the other run artifacts, starts a background worker, then immediately prints `RunId`, `WorkerPid`, and `StatusPath`. The main thread can then read `status_<run_id>.json` until the status becomes `completed` or `failed`, and finally run `verify_artifacts.ps1 -RunId <run_id>`.
-
-## Artifact Layout
-
-Default artifact root:
-
-```text
-.codex/codex_claude_loop/
-  claude-delegate/
-    claude_<run_id>.md
-    config_<run_id>.json
-    prompt_<run_id>.md
-    status_<run_id>.json
-    stream_<run_id>.jsonl
-    trace_<run_id>.log
-  session-pools/
-    <session_key>.json
-```
-
-## Verification
-
-Check one run:
-
-```powershell
-pwsh -NoProfile -File .\plugins\codex-claude-loop\skills\codex-claude-loop\windows_scripts\verify_artifacts.ps1 -RunId <run_id>
-```
-
-Check the latest run:
-
-```powershell
-pwsh -NoProfile -File .\plugins\codex-claude-loop\skills\codex-claude-loop\windows_scripts\verify_artifacts.ps1
-```
-
 ## Installation
 
 This repository is intended to be distributed as a Codex plugin marketplace. The marketplace file lives at `.agents/plugins/marketplace.json`, and the actual plugin lives under `plugins/codex-claude-loop/`.
@@ -216,7 +152,7 @@ If the output includes something like this, the plugin is present in the new Cod
 
 ```text
 codex-claude-loop:codex-claude-loop
-file: r3/codex-claude-loop/0.1.0/skills/codex-claude-loop/SKILL.md
+file: r3/codex-claude-loop/<version>/skills/codex-claude-loop/SKILL.md
 ```
 
 You can also send this prompt in the `Codex Desktop chat box` or a newly opened `Codex CLI interactive interface`:
@@ -262,24 +198,10 @@ It is also normal for Codex to report that the marketplace was upgraded. Restart
 Run this in a `PowerShell terminal`:
 
 ```powershell
-codex debug prompt-input "verify codex-claude-loop is updated" | Select-String "codex-claude-loop:codex-claude-loop"
+(codex debug prompt-input "verify codex-claude-loop is updated" | Select-String -Pattern "codex-claude-loop/[0-9]+\.[0-9]+\.[0-9]+" -AllMatches).Matches.Value
 ```
 
-If only README, CI, or the doctor script changed, the plugin skill version may still show `0.1.0`; that is normal. Whether the plugin version changes depends on the manifest:
-
-```text
-plugins/codex-claude-loop/.codex-plugin/plugin.json
-```
-
-Maintainers should bump `version` in `plugin.json` when changing actual plugin capability, skill content, or runtime scripts so users can tell whether they have the new plugin version.
-
-Before committing or releasing, run:
-
-```powershell
-pwsh -NoProfile -File .\scripts\doctor.ps1 -SkipCodexCli -SkipCodexRead
-```
-
-If the doctor warns that plugin capability files changed, decide whether to bump `version` in `plugins/codex-claude-loop/.codex-plugin/plugin.json`. README, CI, or doctor-only changes usually do not need a version bump; skill, runtime script, or user-visible behavior changes should usually bump patch or minor.
+If the output looks like `codex-claude-loop/0.2.0`, that version is present in the Codex session context.
 
 ## Troubleshooting
 
@@ -429,147 +351,30 @@ codex debug prompt-input "Use codex-claude-loop to test plugin loading" | Select
 
 If the output includes `codex-claude-loop:codex-claude-loop`, the Codex CLI new-session context can see the plugin skill.
 
-### Do Not Run the Internal Delegate Script Directly
+### Common Prompts
 
-Most users should not run `delegate_to_claude.ps1` directly. It is the plugin's internal delegate entrypoint and is designed to be called by a Codex child agent with `CODEX_CLAUDE_LOOP_CHILD_THREAD=1` set.
-
-If you only want to use the plugin, trigger it from the Codex App chat box, the Codex CLI interactive interface, or a prompt such as `codex -C ... "Use codex-claude-loop ..."`.
-
-### Fix a Bug
-
-Short version:
+Fix a bug:
 
 ```text
 Use codex-claude-loop to fix this bug: <describe the bug>
 ```
 
-With constraints:
-
-```text
-Use codex-claude-loop to fix this bug: <describe the bug>
-
-Requirements:
-- Codex analyzes the issue and approves the repair plan.
-- Claude Code only implements the approved fix.
-- Codex reviews the final diff and validation result.
-```
-
-### Build a Feature
-
-Short version:
+Build a feature:
 
 ```text
 Use codex-claude-loop to implement this feature: <describe the feature>
 ```
 
-With constraints:
-
-```text
-Use codex-claude-loop to implement this feature: <describe the feature>
-
-Requirements:
-- Codex defines scope and acceptance criteria first.
-- Claude Code only writes approved code changes.
-- Codex reviews the final diff, validation result, and risks.
-```
-
-### Refactor a Module
-
-Short version:
-
-```text
-Use codex-claude-loop to refactor this module: <module or file path>
-```
-
-With constraints:
-
-```text
-Use codex-claude-loop to refactor this module: <module or file path>
-
-Requirements:
-- Keep existing behavior unchanged.
-- Limit edits to the specified module or files.
-- Codex reviews the final diff before acceptance.
-```
-
-### Fix Build or Test Failures
-
-Short version:
-
-```text
-Use codex-claude-loop to fix these build or test failures: <paste error or failing command>
-```
-
-With constraints:
-
-```text
-Use codex-claude-loop to fix these build or test failures: <paste error or failing command>
-
-Requirements:
-- Codex identifies the likely cause first.
-- Claude Code only implements the approved fix.
-- Codex checks that the requested validation passes.
-```
-
-### Work Within a File Scope
-
-Short version:
+Work within a file scope:
 
 ```text
 Use codex-claude-loop for this task: <describe the task>. Only modify these files: <file-list>.
 ```
 
-With constraints:
-
-```text
-Use codex-claude-loop for this task: <describe the task>
-
-Allowed files:
-- <file path 1>
-- <file path 2>
-
-Requirements:
-- Claude Code must stay inside the allowed file scope.
-- Codex rejects changes outside the scope.
-```
-
-### Rework a Previous Attempt
-
-Short version:
+Rework a previous attempt:
 
 ```text
 Use codex-claude-loop to rework the previous implementation: <describe what must be fixed>
 ```
 
-With constraints:
-
-```text
-Use codex-claude-loop to rework the previous implementation: <describe what must be fixed>
-
-Requirements:
-- Codex lists the rejection findings first.
-- Claude Code only fixes those findings.
-- Codex reviews the rework before acceptance.
-```
-
-## Marketplace Note
-
-This repository includes a marketplace index:
-
-```text
-.agents/plugins/marketplace.json
-```
-
-The marketplace entry points to the plugin subdirectory:
-
-```text
-plugins/codex-claude-loop/
-```
-
-The plugin manifest lives at:
-
-```text
-plugins/codex-claude-loop/.codex-plugin/plugin.json
-```
-
-This repository also includes a CI workflow that runs `scripts/doctor.ps1 -SkipCodexCli -SkipCodexRead` on push and pull request, so marketplace layout regressions are caught before release.
+Most users do not need to run the internal delegate script directly. Trigger the plugin from Codex App, the Codex CLI interactive interface, or a natural-language command such as `codex -C ... "Use codex-claude-loop ..."`.
