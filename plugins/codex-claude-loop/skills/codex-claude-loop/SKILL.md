@@ -49,10 +49,35 @@ The Codex child thread must:
 - Set `CODEX_CLAUDE_LOOP_CHILD_THREAD=1` before invoking the delegate.
 - Run `skills/codex-claude-loop/windows_scripts/delegate_to_claude.ps1`.
 - Pass a task file with `-TaskFile`.
+- Pass `-WorkflowId`, `-TaskId`, and `-Role` on every delegate run.
 - Pass `-TaskMode implementation` or `-TaskMode rework`.
+- Use `-ValidationPhase light` for the delegate pass, then run full validation at main-thread acceptance.
 - Pass `-SessionKey` for stable context reuse.
 - Pass `-AllowedPath` and `-ValidationCommand` whenever the main thread has defined scope and verification.
+- Pass `-AllowParallel -Scope <path-or-scope>` for writable parallel runs.
 - Return the artifact paths, changed files, validation result, and risks to the main thread.
+- Default behavior is asynchronous startup (`StartOnly` path). Use `-WaitForCompletion` only when blocking execution is explicitly needed.
+- Delegate script returns a final JSON line with `state`:
+  - `started`: async startup succeeded, task is still running
+  - `completed`: blocking run finished successfully
+  - `failed`: blocking run finished with failure
+
+Example (child thread command):
+
+```powershell
+$env:CODEX_CLAUDE_LOOP_CHILD_THREAD = "1"
+pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\delegate_to_claude.ps1 `
+  -TaskFile .\.codex\codex_claude_loop\tasks\impl-001.md `
+  -WorkflowId wf-demo-001 `
+  -TaskId task-impl-001 `
+  -Role implementer `
+  -ValidationPhase light `
+  -TaskMode implementation `
+  -SessionMode PrimaryReuse `
+  -SessionKey feature-x `
+  -AllowedPath src `
+  -ValidationCommand "pnpm run build"
+```
 
 ## Required Claude Report Headings
 
@@ -82,6 +107,29 @@ After each delegate run, the main thread should run:
 
 ```powershell
 pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\verify_artifacts.ps1 -RunId <run_id>
+```
+
+After each workflow batch, the main thread should run:
+
+```powershell
+pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\verify_workflow.ps1 -WorkflowId <workflow_id>
+```
+
+Before final acceptance, run full validation from main thread (example):
+
+```powershell
+pnpm run build
+```
+
+Only accept when both are true:
+
+- `status_<run_id>.json` shows `status=completed`
+- `final_gate_<run_id>.json` shows `gateStatus=passed`
+
+When you need aggregated progress for a whole workflow:
+
+```powershell
+pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\watch_delegate_status.ps1 -WorkflowId <workflow_id> -Watch
 ```
 
 The final response to the user must include:

@@ -190,6 +190,7 @@ $changedFiles = @(Get-GitChangedFiles)
 if ($changedFiles.Count -gt 0) {
   $capabilityPatterns = @(
     '^plugins/codex-claude-loop/skills/',
+    '^plugins/codex-claude-loop/hooks/',
     '^plugins/codex-claude-loop/\.codex-plugin/plugin\.json$'
   )
   $manifestPath = 'plugins/codex-claude-loop/.codex-plugin/plugin.json'

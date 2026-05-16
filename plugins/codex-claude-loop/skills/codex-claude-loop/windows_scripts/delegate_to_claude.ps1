@@ -8,7 +8,21 @@ param(
   [ValidateSet("PrimaryReuse", "PrimaryAnchor", "ParallelPool")]
   [string]$SessionMode = "PrimaryReuse",
 
+  [Parameter(Mandatory = $true)]
+  [string]$WorkflowId,
+
+  [Parameter(Mandatory = $true)]
+  [string]$TaskId,
+
+  [Parameter(Mandatory = $true)]
+  [ValidateSet("planner", "implementer", "researcher", "reviewer", "final-verifier")]
+  [string]$Role,
+
   [string]$SessionKey = "",
+  [string]$Scope = "",
+  [switch]$AllowParallel,
+  [ValidateSet("light", "full")]
+  [string]$ValidationPhase = "light",
   [string[]]$AllowedPath = @(),
   [string[]]$ValidationCommand = @(),
   [string]$ArtifactRoot = "",
@@ -22,7 +36,8 @@ param(
   [int]$MaxRetryCount = 1,
   [switch]$BypassPermissions,
   [switch]$DryRun,
-  [switch]$StartOnly
+  [switch]$StartOnly,
+  [switch]$WaitForCompletion
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +70,10 @@ $runtimeArgs = @(
   "--task-file", $TaskFile,
   "--task-mode", $TaskMode,
   "--session-mode", $SessionMode,
+  "--workflow-id", $WorkflowId,
+  "--task-id", $TaskId,
+  "--role", $Role,
+  "--validation-phase", $ValidationPhase,
   "--round", $Round,
   "--max-round", $MaxRound,
   "--max-parallel", $MaxParallel,
@@ -66,6 +85,9 @@ $runtimeArgs = @(
 
 if ($SessionKey) {
   $runtimeArgs += @("--session-key", $SessionKey)
+}
+if ($Scope) {
+  $runtimeArgs += @("--scope", $Scope)
 }
 if ($ArtifactRoot) {
   $runtimeArgs += @("--artifact-root", $ArtifactRoot)
@@ -79,11 +101,17 @@ foreach ($item in $AllowedPath) {
 foreach ($item in $ValidationCommand) {
   $runtimeArgs += @("--validation-command", $item)
 }
+if ($AllowParallel) {
+  $runtimeArgs += "--allow-parallel"
+}
 if ($BypassPermissions) {
   $runtimeArgs += "--bypass-permissions"
 }
 if ($DryRun) {
   $runtimeArgs += "--dry-run"
+}
+if (-not $WaitForCompletion) {
+  $StartOnly = $true
 }
 if ($StartOnly) {
   $runtimeArgs += "--prepare-only"
@@ -138,15 +166,56 @@ if ($StartOnly) {
     $status | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $statusPath -Encoding utf8
   }
 
-  Write-Output "WorkerPid: $($process.Id)"
-  Write-Output "WorkerLog: $workerLog"
-  Write-Output "WorkerErrorLog: $workerErrLog"
+  $payload = [ordered]@{
+    state = "started"
+    runId = $runId
+    workflowId = $WorkflowId
+    taskId = $TaskId
+    role = $Role
+    statusPath = $statusPath
+    configPath = $configPath
+    workerPid = $process.Id
+    workerLog = $workerLog
+    workerErrorLog = $workerErrLog
+  }
+  $payload | ConvertTo-Json -Depth 10 -Compress | Write-Output
   exit 0
 }
 
-if ($pythonPrefixArgs.Count -gt 0) {
-  & $pythonExe @pythonPrefixArgs @runtimeArgs
+$capturedOutput = if ($pythonPrefixArgs.Count -gt 0) {
+  & $pythonExe @pythonPrefixArgs @runtimeArgs 2>&1
 } else {
-  & $pythonExe @runtimeArgs
+  & $pythonExe @runtimeArgs 2>&1
 }
-exit $LASTEXITCODE
+$finalExitCode = $LASTEXITCODE
+foreach ($line in $capturedOutput) {
+  Write-Output $line
+}
+$runId = ""
+$statusValue = if ($finalExitCode -eq 0) { "completed" } else { "failed" }
+$statusPath = ""
+foreach ($line in $capturedOutput) {
+  $text = [string]$line
+  if ($text -match '^RunId:\s*(.+)$') {
+    $runId = $Matches[1].Trim()
+  }
+  if ($text -match '^Status:\s*(.+)$') {
+    $statusValue = $Matches[1].Trim()
+  }
+  if ($text -match '^StatusPath:\s*(.+)$') {
+    $statusPath = $Matches[1].Trim()
+  }
+}
+$state = if ($statusValue -eq "completed") { "completed" } else { "failed" }
+$payload = [ordered]@{
+  state = $state
+  runId = $runId
+  workflowId = $WorkflowId
+  taskId = $TaskId
+  role = $Role
+  status = $statusValue
+  statusPath = $statusPath
+  exitCode = $finalExitCode
+}
+$payload | ConvertTo-Json -Depth 10 -Compress | Write-Output
+exit $finalExitCode

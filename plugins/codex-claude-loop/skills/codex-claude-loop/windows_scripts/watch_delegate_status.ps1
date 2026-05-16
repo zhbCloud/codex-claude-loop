@@ -1,9 +1,10 @@
 param(
   [string]$RunId = "",
+  [string]$WorkflowId = "",
   [string]$ArtifactRoot = "",
   [switch]$Watch,
-  [int]$InitialIntervalSeconds = 2,
-  [int]$MaxIntervalSeconds = 30,
+  [int]$InitialIntervalSeconds = 1,
+  [int]$MaxIntervalSeconds = 12,
   [int]$TimeoutSeconds = 0,
   [int]$StreamTailLines = 0
 )
@@ -41,6 +42,18 @@ function Read-Status {
   return Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
 }
 
+function Read-Workflow {
+  param(
+    [string]$Root,
+    [string]$Id
+  )
+  $workflowPath = Join-Path $Root "workflow_$Id.json"
+  if (-not (Test-Path -LiteralPath $workflowPath -PathType Leaf)) {
+    throw "Workflow artifact not found: $workflowPath"
+  }
+  return Get-Content -LiteralPath $workflowPath -Raw | ConvertFrom-Json
+}
+
 function Format-StatusLine {
   param($Status)
   function Format-Value {
@@ -70,6 +83,15 @@ function Write-Status {
     [int]$TailLines
   )
   Write-Output (Format-StatusLine -Status $Status)
+  if ($Status.workflowId) {
+    Write-Output "WorkflowId=$($Status.workflowId)"
+  }
+  if ($Status.taskId) {
+    Write-Output "TaskId=$($Status.taskId)"
+  }
+  if ($Status.role) {
+    Write-Output "Role=$($Status.role)"
+  }
   if ($Status.lastAssistantTextPreview) {
     Write-Output "LastAssistantTextPreview=$($Status.lastAssistantTextPreview)"
   }
@@ -82,19 +104,84 @@ function Write-Status {
   }
 }
 
+function Write-WorkflowSummary {
+  param(
+    [string]$Root,
+    [string]$WorkflowId,
+    [int]$TailLines
+  )
+  $workflow = Read-Workflow -Root $Root -Id $WorkflowId
+  $runs = @($workflow.runs)
+  $total = $runs.Count
+  $completed = 0
+  $failed = 0
+  $running = 0
+
+  Write-Output "WorkflowId=$WorkflowId TotalRuns=$total"
+
+  foreach ($run in $runs) {
+    $runId = [string]$run.runId
+    $statusValue = [string]$run.status
+    $taskId = [string]$run.taskId
+    $role = [string]$run.role
+    $statusPath = [string]$run.statusPath
+
+    if ($statusPath -and (Test-Path -LiteralPath $statusPath -PathType Leaf)) {
+      $statusDoc = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+      $statusValue = [string]$statusDoc.status
+      if ($TailLines -gt 0) {
+        Write-Status -Root $Root -Status $statusDoc -TailLines $TailLines
+        continue
+      }
+    }
+
+    if ($statusValue -eq "completed") {
+      $completed++
+    } elseif ($statusValue -eq "failed") {
+      $failed++
+    } else {
+      $running++
+    }
+
+    Write-Output "RunId=$runId TaskId=$taskId Role=$role Status=$statusValue"
+  }
+
+  Write-Output "WorkflowSummary Completed=$completed Running=$running Failed=$failed"
+}
+
 $root = Resolve-ArtifactRoot -ExplicitRoot $ArtifactRoot
-$runIdToRead = if ($RunId) { $RunId } else { Get-LatestRunId -Root $root }
 $deadline = if ($TimeoutSeconds -gt 0) { (Get-Date).AddSeconds($TimeoutSeconds) } else { $null }
 $interval = [Math]::Max(1, $InitialIntervalSeconds)
 $maxInterval = [Math]::Max($interval, $MaxIntervalSeconds)
 
 while ($true) {
-  $status = Read-Status -Root $root -Id $runIdToRead
-  Write-Status -Root $root -Status $status -TailLines $StreamTailLines
+  if ($WorkflowId) {
+    Write-WorkflowSummary -Root $root -WorkflowId $WorkflowId -TailLines $StreamTailLines
 
-  if (-not $Watch -or $status.status -in @("completed", "failed")) {
-    break
+    $workflow = Read-Workflow -Root $root -Id $WorkflowId
+    $statuses = @($workflow.runs | ForEach-Object { $_.status })
+    $hasFailed = $statuses -contains "failed"
+    $allFinished = ($statuses.Count -gt 0) -and (@($statuses | Where-Object { $_ -notin @("completed", "failed") }).Count -eq 0)
+
+    if (-not $Watch -or $hasFailed -or $allFinished) {
+      if ($hasFailed) {
+        exit 1
+      }
+      break
+    }
+  } else {
+    $runIdToRead = if ($RunId) { $RunId } else { Get-LatestRunId -Root $root }
+    $status = Read-Status -Root $root -Id $runIdToRead
+    Write-Status -Root $root -Status $status -TailLines $StreamTailLines
+
+    if (-not $Watch -or $status.status -in @("completed", "failed")) {
+      if ($status.status -eq "failed") {
+        exit 1
+      }
+      break
+    }
   }
+
   if ($null -ne $deadline -and (Get-Date) -ge $deadline) {
     Write-Output "WatchTimeout=TimeoutSeconds:$TimeoutSeconds"
     exit 2
@@ -104,7 +191,4 @@ while ($true) {
   $interval = [Math]::Min($maxInterval, [Math]::Max($interval + 3, [int]($interval * 1.5)))
 }
 
-if ($status.status -eq "failed") {
-  exit 1
-}
 exit 0

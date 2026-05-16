@@ -20,6 +20,8 @@ CODEX_CLAUDE_LOOP_CHILD_THREAD=1
 
 The Codex main thread must not invoke `claude` directly. The Codex main thread must not directly invoke the delegate runtime. It may inspect artifacts and run verification scripts.
 
+The plugin includes a hook gate at `hooks/hooks.json` to reinforce this route and deny non-compliant delegation tool calls when the host supports hooks.
+
 ## Roles
 
 Codex main thread:
@@ -123,6 +125,11 @@ Session pool state is written under:
 .codex/codex_claude_loop/session-pools
 ```
 
+Workflow-level artifact:
+
+- `workflow_<workflow_id>.json`
+- `final_gate_<run_id>.json`
+
 ## Progress Monitoring Policy
 
 The main thread should treat `status_<run_id>.json` as the primary progress surface. This keeps progress checks cheap and avoids repeated model/tool cycles caused by tailing raw stream logs.
@@ -130,6 +137,7 @@ The main thread should treat `status_<run_id>.json` as the primary progress surf
 Recommended behavior:
 
 - Poll `status_<run_id>.json` with backoff, or call `windows_scripts/watch_delegate_status.ps1 -RunId <run_id> -Watch`.
+- For multi-run orchestration, call `windows_scripts/watch_delegate_status.ps1 -WorkflowId <workflow_id> -Watch`.
 - Do not repeatedly run `Get-Content -Tail` on `stream_<run_id>.jsonl` during normal progress checks.
 - Inspect `stream_<run_id>.jsonl` only when the run is failed, stalled, timed out, or the user explicitly asks for raw stream diagnostics.
 - Inspect `claude_<run_id>.md` only after the run reaches `completed` or `failed`.
@@ -142,6 +150,7 @@ The status artifact may include:
 - `lastStreamRecordType`: latest Claude stream record type.
 - `lastAssistantTextPreview`: compact assistant-text preview for progress reporting.
 - `streamRecords`: count of Claude stream records processed.
+- `workflowId`, `taskId`, and `role`: workflow metadata for aggregated monitoring.
 
 ## Required Claude Report
 
@@ -164,11 +173,53 @@ The main thread should pass allowed paths with `-AllowedPath`.
 
 When the target workspace is a Git repository, the delegate runtime checks `git diff --name-only` after Claude returns. If changed files are outside the allowed paths, the run is marked failed and must be reviewed or reworked.
 
+## Standard Delegate Command (Child Thread)
+
+```powershell
+$env:CODEX_CLAUDE_LOOP_CHILD_THREAD = "1"
+pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\delegate_to_claude.ps1 `
+  -TaskFile .\.codex\codex_claude_loop\tasks\<task>.md `
+  -WorkflowId <workflow_id> `
+  -TaskId <task_id> `
+  -Role implementer `
+  -ValidationPhase light `
+  -TaskMode implementation `
+  -SessionMode PrimaryReuse `
+  -SessionKey <session_key> `
+  -AllowedPath src `
+  -ValidationCommand "pnpm run build"
+```
+
+This command starts asynchronously by default and returns `RunId`/artifact paths quickly. Add `-WaitForCompletion` only when you explicitly want blocking behavior.
+The delegate wrapper emits a JSON result line with `state` (`started`, `completed`, `failed`). Upstream schedulers must read this field instead of treating process return as completion semantics.
+
+For writable parallel runs, also pass:
+
+```powershell
+-AllowParallel -Scope <owned-path-or-scope>
+```
+
 ## Validation Command Policy
 
 The plan should define validation commands before implementation.
 
 Claude may run only the provided validation commands unless it clearly explains why an extra command is necessary. The main thread decides whether that explanation is acceptable.
+
+Recommended performance pattern:
+
+- Delegate pass: `ValidationPhase=light`
+- Main-thread acceptance gate: run full validation (for example `pnpm run build`)
+- Final accept condition: `status_<run_id>.json.status=completed` and `final_gate_<run_id>.json.gateStatus=passed`
+
+## Workflow Metadata Policy
+
+Every delegate run must pass all three values:
+
+- `WorkflowId`
+- `TaskId`
+- `Role` (`planner`, `implementer`, `researcher`, `reviewer`, `final-verifier`)
+
+If `AllowParallel` is used for writable work, `Scope` is required.
 
 ## Risk Policy
 
