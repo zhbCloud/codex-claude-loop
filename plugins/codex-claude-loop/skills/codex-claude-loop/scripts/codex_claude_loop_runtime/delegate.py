@@ -195,9 +195,21 @@ def prepare_run(ns: argparse.Namespace) -> dict[str, Any]:
         "artifactSchema": ARTIFACT_SCHEMA_VERSION,
         "runId": run_id,
         "status": "queued" if ns.prepare_only else "starting",
+        "phase": "queued" if ns.prepare_only else "preparing",
         "startedAt": now_iso(),
+        "updatedAt": now_iso(),
+        "heartbeatAt": now_iso(),
         "childThreadMarkerValidated": True,
         "exitCode": None,
+        "statusPath": str(status_path),
+        "streamPath": str(stream_path),
+        "outputPath": str(output_path),
+        "configPath": str(config_path),
+        "promptPath": str(prompt_path),
+        "lastStreamAt": None,
+        "lastStreamRecordType": None,
+        "lastAssistantTextPreview": "",
+        "streamRecords": 0,
     }
     config["runtimeOptions"] = {
         "model": ns.model,
@@ -291,7 +303,7 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
     lease: SessionLease | None = None
     exit_code = 1
     try:
-        status.update({"status": "leasing", "updatedAt": now_iso()})
+        status.update({"status": "leasing", "phase": "leasing_session", "updatedAt": now_iso(), "heartbeatAt": now_iso()})
         write_json(status_path, status)
         lease = acquire_session(
             session_root(root),
@@ -305,7 +317,16 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
         )
         config.update({"sessionId": lease.session_id, "resume": lease.resume, "slotName": lease.slot_name})
         write_json(config_path, config)
-        status.update({"status": "running", "updatedAt": now_iso(), "sessionId": lease.session_id, "resume": lease.resume})
+        status.update(
+            {
+                "status": "running",
+                "phase": "claude_running" if not ns.dry_run else "dry_run",
+                "updatedAt": now_iso(),
+                "heartbeatAt": now_iso(),
+                "sessionId": lease.session_id,
+                "resume": lease.resume,
+            }
+        )
         write_json(status_path, status)
 
         if ns.dry_run:
@@ -324,6 +345,7 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
                 f"{ns.name_prefix}-{session_key}",
                 ns.model,
                 ns.bypass_permissions,
+                status_path,
             )
             final_text = str(result.get("finalText") or "").strip()
             if not final_text:
@@ -358,10 +380,15 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
             status_value = "completed"
             exit_code = 0
 
+        status.update({"phase": "finalizing", "updatedAt": now_iso(), "heartbeatAt": now_iso()})
+        write_json(status_path, status)
         status.update(
             {
                 "status": status_value,
+                "phase": status_value,
                 "completedAt": now_iso(),
+                "updatedAt": now_iso(),
+                "heartbeatAt": now_iso(),
                 "exitCode": exit_code,
                 "hasRequiredHeadings": has_headings,
                 "changedFiles": changed_files,
@@ -384,7 +411,17 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
         return exit_code
     except Exception as exc:
         write_startup_failure(output_path, str(exc))
-        status.update({"status": "failed", "completedAt": now_iso(), "exitCode": 1, "failedReasons": [str(exc)]})
+        status.update(
+            {
+                "status": "failed",
+                "phase": "failed",
+                "completedAt": now_iso(),
+                "updatedAt": now_iso(),
+                "heartbeatAt": now_iso(),
+                "exitCode": 1,
+                "failedReasons": [str(exc)],
+            }
+        )
         write_json(status_path, status)
         raise
     finally:

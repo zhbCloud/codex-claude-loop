@@ -201,7 +201,7 @@ Run this in a `PowerShell terminal`:
 (codex debug prompt-input "verify codex-claude-loop is updated" | Select-String -Pattern "codex-claude-loop/[0-9]+\.[0-9]+\.[0-9]+" -AllMatches).Matches.Value
 ```
 
-If the output looks like `codex-claude-loop/0.2.0`, that version is present in the Codex session context.
+If the output looks like `codex-claude-loop/<version>`, that version is present in the Codex session context.
 
 ## Troubleshooting
 

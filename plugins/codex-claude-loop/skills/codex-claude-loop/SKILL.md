@@ -30,6 +30,18 @@ The Codex main thread must not run `claude` directly and must not run `windows_s
 - Accept or reject the work. Claude cannot self-approve final acceptance.
 - If rejected, delegate rework with precise findings and a bounded round count.
 
+## Main Thread Progress Checks
+
+The Codex main thread should avoid high-frequency polling and should not repeatedly tail `stream_<run_id>.jsonl` during normal runs.
+
+Preferred progress flow:
+
+- Ask the child thread to return `RunId` and `StatusPath` after delegate startup when using asynchronous execution.
+- Check `status_<run_id>.json` first, or run `windows_scripts/watch_delegate_status.ps1 -RunId <run_id> -Watch`.
+- Use low-frequency backoff when watching progress. The helper script handles this internally.
+- Read `stream_<run_id>.jsonl` only for timeout, failure, or explicit diagnostic investigation.
+- Read `claude_<run_id>.md` after the run reaches `completed` or `failed`.
+
 ## Child Thread Duties
 
 The Codex child thread must:

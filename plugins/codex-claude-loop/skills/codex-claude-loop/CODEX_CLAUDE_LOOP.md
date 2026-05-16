@@ -123,6 +123,26 @@ Session pool state is written under:
 .codex/codex_claude_loop/session-pools
 ```
 
+## Progress Monitoring Policy
+
+The main thread should treat `status_<run_id>.json` as the primary progress surface. This keeps progress checks cheap and avoids repeated model/tool cycles caused by tailing raw stream logs.
+
+Recommended behavior:
+
+- Poll `status_<run_id>.json` with backoff, or call `windows_scripts/watch_delegate_status.ps1 -RunId <run_id> -Watch`.
+- Do not repeatedly run `Get-Content -Tail` on `stream_<run_id>.jsonl` during normal progress checks.
+- Inspect `stream_<run_id>.jsonl` only when the run is failed, stalled, timed out, or the user explicitly asks for raw stream diagnostics.
+- Inspect `claude_<run_id>.md` only after the run reaches `completed` or `failed`.
+
+The status artifact may include:
+
+- `phase`: current runtime phase such as `queued`, `leasing_session`, `claude_running`, `finalizing`, `completed`, or `failed`.
+- `heartbeatAt`: latest delegate heartbeat timestamp.
+- `lastStreamAt`: latest Claude stream timestamp.
+- `lastStreamRecordType`: latest Claude stream record type.
+- `lastAssistantTextPreview`: compact assistant-text preview for progress reporting.
+- `streamRecords`: count of Claude stream records processed.
+
 ## Required Claude Report
 
 Claude must finish with these exact headings:

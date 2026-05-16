@@ -6,8 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .common import DelegateError, has_required_headings
-from .io_utils import write_text
+from .common import DelegateError, has_required_headings, now_iso
+from .io_utils import read_json, write_json, write_text
 
 
 def build_claude_args(session_id: str, resume: bool, session_name: str, model: str, bypass_permissions: bool) -> list[str]:
@@ -44,6 +44,23 @@ def _extract_text(record: dict[str, Any]) -> list[str]:
     return values
 
 
+def _preview(value: str, limit: int = 500) -> str:
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _update_status(status_path: Path | None, updates: dict[str, Any]) -> None:
+    if status_path is None or not status_path.exists():
+        return
+    status = read_json(status_path)
+    status.update(updates)
+    status["updatedAt"] = now_iso()
+    status["heartbeatAt"] = status["updatedAt"]
+    write_json(status_path, status)
+
+
 def run_claude(
     prompt: str,
     cwd: Path,
@@ -54,6 +71,7 @@ def run_claude(
     session_name: str,
     model: str,
     bypass_permissions: bool,
+    status_path: Path | None = None,
 ) -> dict[str, Any]:
     claude = shutil.which("claude")
     if not claude:
@@ -63,11 +81,23 @@ def run_claude(
     assistant_texts: list[str] = []
     saw_result_success = False
     raw_non_json: list[str] = []
+    stream_records = 0
 
     stream_path.parent.mkdir(parents=True, exist_ok=True)
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     with stream_path.open("w", encoding="utf-8", newline="\n") as stream, trace_path.open("w", encoding="utf-8", newline="\n") as trace:
         trace.write(f"[claude] {claude} {' '.join(args)}\n")
+        _update_status(
+            status_path,
+            {
+                "phase": "claude_starting",
+                "lastStreamAt": None,
+                "lastStreamRecordType": None,
+                "lastAssistantTextPreview": "",
+                "lastRawOutputPreview": "",
+                "streamRecords": 0,
+            },
+        )
         process = subprocess.Popen(
             [claude, *args],
             cwd=str(cwd),
@@ -89,6 +119,7 @@ def run_claude(
             line = line.rstrip("\r\n")
             if not line:
                 continue
+            stream_records += 1
             stream.write(line + "\n")
             stream.flush()
             try:
@@ -97,15 +128,55 @@ def run_claude(
                 raw_non_json.append(line)
                 trace.write("[raw] non-json output\n")
                 trace.flush()
+                _update_status(
+                    status_path,
+                    {
+                        "phase": "claude_running",
+                        "lastStreamAt": now_iso(),
+                        "lastStreamRecordType": "raw",
+                        "lastRawOutputPreview": _preview(line),
+                        "streamRecords": stream_records,
+                    },
+                )
                 continue
             record_type = str(record.get("type", ""))
             trace.write(f"[{record_type or 'record'}]\n")
             if record_type == "assistant":
-                assistant_texts.extend(_extract_text(record))
+                extracted = _extract_text(record)
+                assistant_texts.extend(extracted)
+                if extracted:
+                    _update_status(
+                        status_path,
+                        {
+                            "phase": "claude_running",
+                            "lastStreamAt": now_iso(),
+                            "lastStreamRecordType": record_type,
+                            "lastAssistantTextPreview": _preview(extracted[-1]),
+                            "streamRecords": stream_records,
+                        },
+                    )
             if record_type == "result" and record.get("subtype") == "success":
                 saw_result_success = True
+            if record_type != "assistant":
+                _update_status(
+                    status_path,
+                    {
+                        "phase": "claude_running",
+                        "lastStreamAt": now_iso(),
+                        "lastStreamRecordType": record_type or "record",
+                        "streamRecords": stream_records,
+                    },
+                )
             trace.flush()
         exit_code = process.wait()
+        _update_status(
+            status_path,
+            {
+                "phase": "claude_finished",
+                "lastStreamAt": now_iso(),
+                "streamRecords": stream_records,
+            },
+        )
 
     final_text = "\n\n".join(text.strip() for text in assistant_texts if text.strip()).strip()
     return {
