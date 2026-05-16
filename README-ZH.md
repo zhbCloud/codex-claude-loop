@@ -128,6 +128,22 @@ codex --version
 npm i -g @openai/codex
 ```
 
+#### 0. 运行安装前自检
+
+添加 marketplace 前，先在仓库根目录运行本地 doctor 脚本：
+
+```powershell
+pwsh -NoProfile -File .\scripts\doctor.ps1
+```
+
+doctor 会检查 Windows 要求、Codex CLI 是否可用、marketplace JSON、插件目录布局、manifest 路径、skill 路径、README 旧路径残留，以及 Codex 是否能通过 `plugin/read` 读取插件。
+
+如果只想在 CI 或仓库校验中检查结构，不检查本机 Codex 环境，可以跳过机器相关检查：
+
+```powershell
+pwsh -NoProfile -File .\scripts\doctor.ps1 -SkipCodexCli -SkipCodexRead
+```
+
 #### 1. 添加插件 Marketplace
 
 ```powershell
@@ -340,3 +356,5 @@ plugins/codex-claude-loop/
 ```text
 plugins/codex-claude-loop/.codex-plugin/plugin.json
 ```
+
+本仓库还包含一个 CI 工作流，会在 push 和 pull request 时运行 `scripts/doctor.ps1 -SkipCodexCli -SkipCodexRead`，用于在发布前发现 marketplace 布局回退问题。

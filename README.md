@@ -128,6 +128,22 @@ If Codex CLI is not installed, install it first:
 npm i -g @openai/codex
 ```
 
+#### 0. Run the Installation Doctor
+
+Before adding the marketplace, run the local doctor script from the repository root:
+
+```powershell
+pwsh -NoProfile -File .\scripts\doctor.ps1
+```
+
+The doctor checks the Windows requirement, Codex CLI availability, marketplace JSON, plugin layout, manifest path, skill path, README stale paths, and whether Codex can read the plugin through `plugin/read`.
+
+For CI or repository-only validation, skip machine-specific Codex checks:
+
+```powershell
+pwsh -NoProfile -File .\scripts\doctor.ps1 -SkipCodexCli -SkipCodexRead
+```
+
 #### 1. Add the Plugin Marketplace
 
 ```powershell
@@ -340,3 +356,5 @@ The plugin manifest lives at:
 ```text
 plugins/codex-claude-loop/.codex-plugin/plugin.json
 ```
+
+This repository also includes a CI workflow that runs `scripts/doctor.ps1 -SkipCodexCli -SkipCodexRead` on push and pull request, so marketplace layout regressions are caught before release.

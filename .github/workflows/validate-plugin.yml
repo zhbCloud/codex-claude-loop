@@ -1,0 +1,17 @@
+name: Validate Codex Plugin
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    name: Validate marketplace and plugin layout
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run plugin doctor
+        shell: pwsh
+        run: ./scripts/doctor.ps1 -SkipCodexCli -SkipCodexRead
