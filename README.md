@@ -273,6 +273,14 @@ plugins/codex-claude-loop/.codex-plugin/plugin.json
 
 Maintainers should bump `version` in `plugin.json` when changing actual plugin capability, skill content, or runtime scripts so users can tell whether they have the new plugin version.
 
+Before committing or releasing, run:
+
+```powershell
+pwsh -NoProfile -File .\scripts\doctor.ps1 -SkipCodexCli -SkipCodexRead
+```
+
+If the doctor warns that plugin capability files changed, decide whether to bump `version` in `plugins/codex-claude-loop/.codex-plugin/plugin.json`. README, CI, or doctor-only changes usually do not need a version bump; skill, runtime script, or user-visible behavior changes should usually bump patch or minor.
+
 ## Troubleshooting
 
 ### Codex Claude Loop Does Not Appear in the Plugin List

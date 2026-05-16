@@ -37,6 +37,21 @@ function Test-PathInside {
   return $child.StartsWith($base, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-GitChangedFiles {
+  $gitCommand = Get-Command git -ErrorAction SilentlyContinue
+  if ($null -eq $gitCommand) {
+    return @()
+  }
+
+  try {
+    $diffFiles = & git -C $RepoRoot diff --name-only 2>$null
+    $stagedFiles = & git -C $RepoRoot diff --cached --name-only 2>$null
+    return @($diffFiles + $stagedFiles) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+  } catch {
+    return @()
+  }
+}
+
 Write-Host 'Codex Claude Loop doctor'
 Write-Host "Repository: $RepoRoot"
 
@@ -170,6 +185,35 @@ foreach ($readmePath in $readmePaths) {
 }
 
 Write-Host '[ok] README stale-path checks completed'
+
+$changedFiles = @(Get-GitChangedFiles)
+if ($changedFiles.Count -gt 0) {
+  $capabilityPatterns = @(
+    '^plugins/codex-claude-loop/skills/',
+    '^plugins/codex-claude-loop/\.codex-plugin/plugin\.json$'
+  )
+  $manifestPath = 'plugins/codex-claude-loop/.codex-plugin/plugin.json'
+  $capabilityChanged = $false
+  foreach ($file in $changedFiles) {
+    $normalizedFile = $file.Replace('\', '/')
+    foreach ($pattern in $capabilityPatterns) {
+      if ($normalizedFile -match $pattern) {
+        $capabilityChanged = $true
+        break
+      }
+    }
+    if ($capabilityChanged) {
+      break
+    }
+  }
+
+  $manifestChanged = $changedFiles | Where-Object { $_.Replace('\', '/') -eq $manifestPath } | Select-Object -First 1
+  if ($capabilityChanged -and -not $manifestChanged) {
+    Add-Warning "Plugin capability files changed. Check whether $manifestPath version should be bumped before release."
+  } elseif ($capabilityChanged) {
+    Write-Host '[ok] Plugin capability changes include plugin.json; confirm version bump is intentional'
+  }
+}
 
 if (-not $SkipCodexCli) {
   $codexCommand = Get-Command codex -ErrorAction SilentlyContinue

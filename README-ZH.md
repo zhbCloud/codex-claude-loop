@@ -273,6 +273,14 @@ plugins/codex-claude-loop/.codex-plugin/plugin.json
 
 维护者如果修改了实际插件能力、skill 内容或运行脚本，建议同步更新 `plugin.json` 中的 `version`，方便用户判断自己是否拿到新版本。
 
+提交或发布前建议运行：
+
+```powershell
+pwsh -NoProfile -File .\scripts\doctor.ps1 -SkipCodexCli -SkipCodexRead
+```
+
+如果 doctor 提示插件能力相关文件已变化，请判断是否需要同步提升 `plugins/codex-claude-loop/.codex-plugin/plugin.json` 中的 `version`。只改 README、CI 或 doctor 脚本时通常不需要提升版本；修改 skill、运行脚本或用户可见行为时建议提升 patch 或 minor 版本。
+
 ## 常见问题与排障
 
 ### 插件列表里看不到 Codex Claude Loop
