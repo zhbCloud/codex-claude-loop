@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .common import REQUIRED_HEADINGS, has_required_headings
+from .common import FAST_REQUIRED_HEADINGS, STRICT_REQUIRED_HEADINGS, has_required_headings
 from .io_utils import read_json, read_text
 
 
@@ -39,8 +39,10 @@ def verify_run(root: Path, run_id: str) -> dict[str, Any]:
         problems.append("status.json does not confirm child-thread marker validation")
     if not config.get("childThreadMarkerValidated"):
         problems.append("config.json does not confirm child-thread marker validation")
-    if not has_required_headings(output):
-        problems.append("Claude report is missing required headings: " + ", ".join(REQUIRED_HEADINGS))
+    strict = str(config.get("workMode") or "fast") == "strict"
+    if not has_required_headings(output, strict=strict):
+        expected = STRICT_REQUIRED_HEADINGS if strict else FAST_REQUIRED_HEADINGS
+        problems.append("Claude report is missing required headings: " + ", ".join(expected))
     if status.get("outOfScopeFiles"):
         problems.append("Out-of-scope files changed: " + ", ".join(status["outOfScopeFiles"]))
     if status.get("status") != "completed":

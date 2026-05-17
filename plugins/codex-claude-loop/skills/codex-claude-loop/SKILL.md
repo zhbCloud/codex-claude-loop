@@ -55,9 +55,12 @@ The Codex child thread must:
 - Pass `-TaskMode implementation` or `-TaskMode rework`.
 - Use `-ValidationPhase light` for the delegate pass, then run full validation at main-thread acceptance.
 - Pass `-SessionKey` for stable context reuse.
+- Pass `-WorkMode fast` for small, high-frequency tasks where quick scoped evidence is enough.
+- Pass `-WorkMode strict` for parallel writable work, risky changes, reviewer runs, final-verifier runs, migrations, or any task that needs a full evidence chain. `-WorkMode auto` chooses strict for reviewer/final-verifier/parallel/task-contract runs and fast otherwise.
 - Pass `-AllowedPath` and `-ValidationCommand` whenever the main thread has defined scope and verification.
 - Use `-AllowedPath .` for approved repo-wide migrations or sweeps that intentionally include root config files. The runtime treats `.`, `./`, and the repo root absolute path as the whole repository.
 - For multiple validation commands in PowerShell, pass one array binding, e.g. `-ValidationCommand @("node --check src/a.js", "node --check src/b.js")`.
+- In strict mode, validate the task file before dispatch with `windows_scripts/validate_delegate_task.ps1`.
 - Pass `-AllowParallel -Scope <path-or-scope>` for writable parallel runs.
 - Return the artifact paths, changed files, validation result, and risks to the main thread.
 - Default behavior is asynchronous startup (`StartOnly` path). Use `-WaitForCompletion` only when blocking execution is explicitly needed.
@@ -75,6 +78,7 @@ pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\delegate_to_cla
   -WorkflowId wf-demo-001 `
   -TaskId task-impl-001 `
   -Role implementer `
+  -WorkMode fast `
   -ValidationPhase light `
   -TaskMode implementation `
   -SessionMode PrimaryReuse `
@@ -83,9 +87,17 @@ pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\delegate_to_cla
   -ValidationCommand "pnpm run build"
 ```
 
+## Work Modes
+
+`fast` mode is optimized for personal high-frequency use and small scoped changes. It keeps the existing six-heading report and allows a completed light-validation run to pass its run gate when scope and headings are clean.
+
+`strict` mode is optimized for complex projects. It requires the task-file contract sections `Goal`, `Allowed Scope`, `Forbidden Actions`, `Acceptance Criteria`, `Verification`, and `Report Requirements`; uses the expanded report headings; and requires accepted spec/quality reviewer evidence plus a final-verifier run at workflow verification time.
+
+`auto` mode is the default. It uses strict mode when the task is a reviewer, final-verifier, parallel writable run, or already has a strict task-file contract; otherwise it stays fast.
+
 ## Required Claude Report Headings
 
-Every Claude delegate report must include these exact headings:
+Fast-mode reports must include:
 
 ```text
 Process Log
@@ -96,12 +108,26 @@ Final Result
 Risks Or Follow-ups
 ```
 
+Strict-mode reports must include:
+
+```text
+Process Log
+Status
+Role
+Summary
+Changed Files
+Verification
+Findings
+Final Result
+Risks Or Follow-ups
+```
+
 If any heading is missing, the main thread must reject the delegate report or ask for report repair through the delegate runtime.
 
 ## Default Limits
 
 - Implementation rework rounds: 2
-- Parallel pool size: 3
+- Parallel pool size: 5
 - P0/P1 findings: reject by default
 - P2/P3 findings: Codex main thread decides
 

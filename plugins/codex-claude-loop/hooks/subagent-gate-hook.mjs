@@ -3,23 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REQUIRED_MODEL = "gpt-5.3-codex";
-const REQUIRED_EFFORT = "medium";
 const LOOP_MODE_TTL_MS = 6 * 60 * 60 * 1000;
 const LOOP_MODE_RELATIVE_PATH = path.join(".codex", "codex_claude_loop", "loop_mode.json");
-const ALLOWED_ROLES = new Set(["planner", "implementer", "researcher", "reviewer", "final-verifier"]);
-const TRIGGER_PATTERNS = [
-  /codex[-_\s]?claude[-_\s]?loop/i,
-  /Claude\s+Code/i,
-  /child[- ]?agent/i,
-  /sub[- ]?agent/i,
-  /child[- ]?thread/i,
-  /sub[- ]?thread/i,
-  /delegat(?:e|ion|ing)/i,
-  /worker[- ]?execution/i,
-  /子代理|子线程|多代理|委派|派工|执行层/
-];
-const SPAWN_TOOL_NAMES = new Set(["spawn_agent", "task", "subagent", "agent", "worker"]);
 const SHELL_TOOL_NAMES = new Set(["bash", "shell_command", "functions.shell_command"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "functions.apply_patch"]);
 const PARALLEL_TOOL_NAMES = new Set(["multi_tool_use.parallel", "parallel"]);
@@ -34,7 +19,8 @@ const FALLBACK_CONTEXT = [
   "- Required chain: Codex main thread -> spawn_agent child thread -> delegate_to_claude.ps1 -> Claude CLI.",
   "- Do not use default subagent flow, direct claude execution, or direct main-thread delegate execution.",
   "- Child spawn metadata should use model gpt-5.3-codex and reasoning_effort medium.",
-  "- Child must set CODEX_CLAUDE_LOOP_CHILD_THREAD=1 and invoke delegate_to_claude.ps1 with TaskFile/WorkflowId/TaskId/Role."
+  "- Child must set CODEX_CLAUDE_LOOP_CHILD_THREAD=1 and invoke delegate_to_claude.ps1 with TaskFile/WorkflowId/TaskId/Role/SessionKey.",
+  "- Use WorkMode fast for simple high-frequency tasks and WorkMode strict for parallel, reviewer, final-verifier, or high-risk tasks."
 ].join("\n");
 
 function pluginRoot() {
@@ -42,6 +28,53 @@ function pluginRoot() {
   if (process.env.CLAUDE_PLUGIN_ROOT) return process.env.CLAUDE_PLUGIN_ROOT;
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 }
+
+const DEFAULT_CONTRACT = {
+  spawn: { model: "gpt-5.3-codex", reasoningEffort: "medium", forkContext: false },
+  workerRoles: ["planner", "implementer", "researcher", "reviewer", "final-verifier"],
+  triggerPatterns: [
+    "codex[-_\\s]?claude[-_\\s]?loop",
+    "Claude\\s+Code",
+    "child[- ]?agent",
+    "sub[- ]?agent",
+    "child[- ]?thread",
+    "sub[- ]?thread",
+    "delegat(?:e|ion|ing)",
+    "worker[- ]?execution",
+    "子代理|子线程|多代理|委派|派工|执行层"
+  ],
+  spawnToolNames: ["spawn_agent", "task", "subagent", "agent", "worker"],
+  delegateEntrypointPattern: "delegate_to_claude(?:\\.(?:ps1|sh|cmd|bat))?",
+  requiredDelegateArgs: ["-TaskFile", "-WorkflowId", "-TaskId", "-Role", "-SessionKey"],
+  reviewerRequiredArgs: ["-ReviewForTaskId", "-ReviewKind"],
+  parallelRequiredArgs: ["-Scope"],
+  legacy: { forbiddenArgs: ["-Task", "-Mode"], forbiddenClaudeArgs: ["--effort"] }
+};
+
+function readContract() {
+  const root = pluginRoot();
+  const loaded = safeReadJson(path.join(root, "skills", "codex-claude-loop", "contract.json")) || {};
+  return {
+    ...DEFAULT_CONTRACT,
+    ...loaded,
+    spawn: { ...DEFAULT_CONTRACT.spawn, ...(loaded.spawn || {}) },
+    legacy: { ...DEFAULT_CONTRACT.legacy, ...(loaded.legacy || {}) }
+  };
+}
+
+const CONTRACT = readContract();
+const REQUIRED_MODEL = CONTRACT.spawn.model;
+const REQUIRED_EFFORT = CONTRACT.spawn.reasoningEffort;
+const REQUIRED_FORK_CONTEXT = CONTRACT.spawn.forkContext;
+const ALLOWED_ROLES = new Set(CONTRACT.workerRoles || DEFAULT_CONTRACT.workerRoles);
+const TRIGGER_PATTERNS = (CONTRACT.triggerPatterns || DEFAULT_CONTRACT.triggerPatterns).map((pattern) => new RegExp(pattern, "i"));
+const SPAWN_TOOL_NAMES = new Set(CONTRACT.spawnToolNames || DEFAULT_CONTRACT.spawnToolNames);
+const DELEGATE_ENTRYPOINT = new RegExp(CONTRACT.delegateEntrypointPattern || DEFAULT_CONTRACT.delegateEntrypointPattern, "i");
+const REQUIRED_DELEGATE_ARGS = CONTRACT.requiredDelegateArgs || DEFAULT_CONTRACT.requiredDelegateArgs;
+const REVIEWER_REQUIRED_ARGS = CONTRACT.reviewerRequiredArgs || DEFAULT_CONTRACT.reviewerRequiredArgs;
+const PARALLEL_REQUIRED_ARGS = CONTRACT.parallelRequiredArgs || DEFAULT_CONTRACT.parallelRequiredArgs;
+const FORBIDDEN_LEGACY_ARGS = CONTRACT.legacy.forbiddenArgs || DEFAULT_CONTRACT.legacy.forbiddenArgs;
+const FORBIDDEN_CLAUDE_ARGS = CONTRACT.legacy.forbiddenClaudeArgs || DEFAULT_CONTRACT.legacy.forbiddenClaudeArgs;
 
 function readOptionalText(filePath) {
   try {
@@ -222,12 +255,26 @@ function has(pattern, serialized) {
   return pattern.test(serialized);
 }
 
+function argName(value) {
+  return String(value).replace(/^-+/, "");
+}
+
+function hasCliArg(arg, serialized) {
+  const name = argName(arg);
+  const kebab = name.replace(/[A-Z]/g, (item, index) => `${index ? "-" : ""}${item.toLowerCase()}`);
+  return new RegExp(`(?:^|[\\s"'])(?:-${name}|--${kebab})\\b`, "i").test(serialized);
+}
+
+function hasAnyForbiddenArg(args, serialized) {
+  return args.some((arg) => hasCliArg(arg, serialized));
+}
+
 function hasDirectClaudeCommand(serialized) {
   return /(?:^|[\s;&|"'`])(?:\.\/|\.\\|[\w:/\\.-]*[/\\])?claude(?:\.cmd|\.exe)?(?=$|[\s;&|"'`])/i.test(serialized);
 }
 
 function isDelegateCommand(serialized) {
-  return has(/delegate_to_claude(?:\.(?:ps1|sh|cmd|bat))?/i, serialized)
+  return has(DELEGATE_ENTRYPOINT, serialized)
     && has(/CODEX_CLAUDE_LOOP_CHILD_THREAD\s*(?:=|:)\s*["']?1["']?/i, serialized);
 }
 
@@ -305,22 +352,33 @@ function validateWorkflowPayload(payload) {
 
   if (prop(payload, "model", "model") !== REQUIRED_MODEL) problems.push(`model must be ${REQUIRED_MODEL}`);
   if (prop(payload, "reasoning_effort", "reasoningEffort") !== REQUIRED_EFFORT) problems.push(`reasoning_effort must be ${REQUIRED_EFFORT}`);
-  if (prop(payload, "fork_context", "forkContext") !== false) problems.push("fork_context must be false");
+  if (prop(payload, "fork_context", "forkContext") !== REQUIRED_FORK_CONTEXT) problems.push(`fork_context must be ${REQUIRED_FORK_CONTEXT}`);
 
   if (hasDirectClaudeCommand(serialized)) problems.push("direct Claude CLI execution is forbidden");
+  if (hasAnyForbiddenArg(FORBIDDEN_CLAUDE_ARGS, serialized)) problems.push(`forbidden Claude argument is present: ${FORBIDDEN_CLAUDE_ARGS.join(", ")}`);
+  if (hasAnyForbiddenArg(FORBIDDEN_LEGACY_ARGS, serialized)) problems.push(`legacy delegate argument is forbidden: ${FORBIDDEN_LEGACY_ARGS.join(", ")}`);
   if (!has(/CODEX_CLAUDE_LOOP_CHILD_THREAD\s*(?:=|:)\s*["']?1["']?/i, serialized)) problems.push("CODEX_CLAUDE_LOOP_CHILD_THREAD=1 is required");
-  if (!has(/delegate_to_claude(?:\.(?:ps1|sh|cmd|bat))?/i, serialized)) problems.push("delegate_to_claude entrypoint is required");
-  if (!has(/(?:^|[\s"'])(?:-TaskFile|--task-file)\b/i, serialized)) problems.push("-TaskFile is required");
-  if (!has(/(?:^|[\s"'])(?:-WorkflowId|--workflow-id)\b/i, serialized) && !prop(payload, "workflow_id", "workflowId")) problems.push("-WorkflowId is required");
-  if (!has(/(?:^|[\s"'])(?:-TaskId|--task-id)\b/i, serialized) && !prop(payload, "task_id", "taskId")) problems.push("-TaskId is required");
+  if (!has(DELEGATE_ENTRYPOINT, serialized)) problems.push("delegate_to_claude entrypoint is required");
+  for (const arg of REQUIRED_DELEGATE_ARGS) {
+    const camel = argName(arg);
+    const snake = camel.replace(/[A-Z]/g, (item, index) => `${index ? "_" : ""}${item.toLowerCase()}`);
+    if (!hasCliArg(arg, serialized) && !prop(payload, snake, camel.charAt(0).toLowerCase() + camel.slice(1))) {
+      problems.push(`${arg} is required`);
+    }
+  }
 
   const role = String(prop(payload, "role", "role") || roleValue(serialized) || "").toLowerCase();
   if (!role) problems.push("-Role is required");
   else if (!ALLOWED_ROLES.has(role)) problems.push(`-Role must be one of ${Array.from(ALLOWED_ROLES).join(", ")}`);
 
   const hasAllowParallel = has(/(?:^|[\s"'])-(?:AllowParallel)\b|(?:^|[\s"'])--allow-parallel\b/i, serialized);
-  const hasScope = has(/(?:^|[\s"'])(?:-Scope|--scope)\b/i, serialized);
-  if (hasAllowParallel && !hasScope) problems.push("-Scope is required when -AllowParallel is used");
+  const hasScope = PARALLEL_REQUIRED_ARGS.every((arg) => hasCliArg(arg, serialized));
+  if (hasAllowParallel && !hasScope) problems.push(`${PARALLEL_REQUIRED_ARGS.join(", ")} is required when -AllowParallel is used`);
+  if (role === "reviewer") {
+    for (const arg of REVIEWER_REQUIRED_ARGS) {
+      if (!hasCliArg(arg, serialized)) problems.push(`${arg} is required when -Role reviewer is used`);
+    }
+  }
 
   return problems;
 }
@@ -338,17 +396,24 @@ function handlePreToolUse(input) {
   if (SHELL_TOOL_NAMES.has(toolName)) {
     const problems = [];
     if (hasDirectClaudeCommand(serialized)) problems.push("direct Claude CLI execution is forbidden");
-    if (has(/delegate_to_claude(?:\.(?:ps1|sh|cmd|bat))?/i, serialized)) {
+    if (hasAnyForbiddenArg(FORBIDDEN_CLAUDE_ARGS, serialized)) problems.push(`forbidden Claude argument is present: ${FORBIDDEN_CLAUDE_ARGS.join(", ")}`);
+    if (has(DELEGATE_ENTRYPOINT, serialized)) {
+      if (hasAnyForbiddenArg(FORBIDDEN_LEGACY_ARGS, serialized)) problems.push(`legacy delegate argument is forbidden: ${FORBIDDEN_LEGACY_ARGS.join(", ")}`);
       if (!has(/CODEX_CLAUDE_LOOP_CHILD_THREAD\s*(?:=|:)\s*["']?1["']?/i, serialized)) problems.push("CODEX_CLAUDE_LOOP_CHILD_THREAD=1 is required");
-      if (!has(/(?:^|[\s"'])(?:-TaskFile|--task-file)\b/i, serialized)) problems.push("-TaskFile is required");
-      if (!has(/(?:^|[\s"'])(?:-WorkflowId|--workflow-id)\b/i, serialized)) problems.push("-WorkflowId is required");
-      if (!has(/(?:^|[\s"'])(?:-TaskId|--task-id)\b/i, serialized)) problems.push("-TaskId is required");
+      for (const arg of REQUIRED_DELEGATE_ARGS) {
+        if (!hasCliArg(arg, serialized)) problems.push(`${arg} is required`);
+      }
       const role = roleValue(serialized);
       if (!role) problems.push("-Role is required");
       else if (!ALLOWED_ROLES.has(role)) problems.push(`-Role must be one of ${Array.from(ALLOWED_ROLES).join(", ")}`);
       const hasAllowParallel = has(/(?:^|[\s"'])-(?:AllowParallel)\b|(?:^|[\s"'])--allow-parallel\b/i, serialized);
-      const hasScope = has(/(?:^|[\s"'])(?:-Scope|--scope)\b/i, serialized);
-      if (hasAllowParallel && !hasScope) problems.push("-Scope is required when -AllowParallel is used");
+      const hasScope = PARALLEL_REQUIRED_ARGS.every((arg) => hasCliArg(arg, serialized));
+      if (hasAllowParallel && !hasScope) problems.push(`${PARALLEL_REQUIRED_ARGS.join(", ")} is required when -AllowParallel is used`);
+      if (role === "reviewer") {
+        for (const arg of REVIEWER_REQUIRED_ARGS) {
+          if (!hasCliArg(arg, serialized)) problems.push(`${arg} is required when -Role reviewer is used`);
+        }
+      }
     }
     if (problems.length > 0) writeJson(deny(`codex-claude-loop gate blocked Bash: ${problems.join("; ")}.`));
     return;

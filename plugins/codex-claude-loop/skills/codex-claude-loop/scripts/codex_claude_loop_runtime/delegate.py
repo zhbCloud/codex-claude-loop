@@ -13,11 +13,24 @@ from types import SimpleNamespace
 from typing import Any
 
 from .claude_cli import run_claude, write_startup_failure
-from .common import ARTIFACT_SCHEMA_VERSION, CHILD_MARKER_NAME, CHILD_MARKER_VALUE, DelegateError, has_required_headings, now_iso
+from .common import (
+    ARTIFACT_SCHEMA_VERSION,
+    CHILD_MARKER_NAME,
+    CHILD_MARKER_VALUE,
+    DelegateError,
+    INVOCATION_CONTRACT,
+    STRICT_REVIEW_KINDS,
+    WORK_MODES,
+    has_required_headings,
+    now_iso,
+)
 from .fingerprint import safe_key, task_fingerprint
 from .io_utils import ensure_writable, read_json, read_text, write_json, write_text
+from .reports import report_is_accepted
 from .sessions import SessionLease, acquire_session, commit_session, release_session
 from .state_machine import state_for_task_mode
+from .task_contract import has_task_contract, validate_task_text
+from .workflow import finalize_workflow_record, update_workflow_record, update_workflow_status, write_final_gate
 
 ALLOWED_ROLES = {"planner", "implementer", "researcher", "reviewer", "final-verifier"}
 
@@ -51,6 +64,19 @@ def safe_identifier(value: str, default_prefix: str) -> str:
     return f"{default_prefix}-{uuid.uuid4().hex[:8]}"
 
 
+def effective_work_mode(ns: argparse.Namespace | SimpleNamespace, task_text: str) -> str:
+    requested = str(getattr(ns, "work_mode", "auto") or "auto").lower()
+    if requested in {"fast", "strict"}:
+        return requested
+    if getattr(ns, "allow_parallel", False):
+        return "strict"
+    if str(getattr(ns, "role", "") or "") in {"reviewer", "final-verifier"}:
+        return "strict"
+    if has_task_contract(task_text):
+        return "strict"
+    return "fast"
+
+
 def build_prompt(ns: argparse.Namespace, task_text: str, run_id: str, allowed_paths: list[str], validation_commands: list[str]) -> str:
     workflow_state = state_for_task_mode(ns.task_mode)
     allowed = "\n".join(f"- {item}" for item in allowed_paths) or "- Not specified; ask Codex main thread to narrow scope if needed."
@@ -62,6 +88,38 @@ def build_prompt(ns: argparse.Namespace, task_text: str, run_id: str, allowed_pa
         )
     else:
         validation_policy = "Validation phase is FULL. Run the provided full validation commands whenever possible."
+    if ns.effective_work_mode == "strict":
+        report_contract = """Your final answer must contain these exact headings:
+
+Process Log
+Status
+Role
+Summary
+Changed Files
+Verification
+Findings
+Final Result
+Risks Or Follow-ups
+
+Status and Final Result must use one of:
+PASS
+PASS_WITH_CONCERNS
+NEEDS_CONTEXT
+BLOCKED
+FAIL
+
+Role must match the delegated role."""
+    else:
+        report_contract = """Your final answer must contain these exact headings:
+
+Process Log
+Summary
+Changed Files
+Verification
+Final Result
+Risks Or Follow-ups
+
+Final Result should be PASS, PASS_WITH_CONCERNS, NEEDS_CONTEXT, BLOCKED, or FAIL."""
     return f"""# Codex Claude Loop Delegate Task
 
 RunId: {run_id}
@@ -69,6 +127,7 @@ WorkflowId: {ns.workflow_id}
 TaskId: {ns.task_id}
 Role: {ns.role}
 TaskMode: {ns.task_mode}
+WorkMode: {ns.effective_work_mode}
 WorkflowState: {workflow_state}
 Round: {ns.round}/{ns.max_round}
 
@@ -93,14 +152,7 @@ Run these commands when possible. If blocked, explain the blocker and whether it
 
 ## Required Report Headings
 
-Your final answer must contain these exact headings:
-
-Process Log
-Summary
-Changed Files
-Verification
-Final Result
-Risks Or Follow-ups
+{report_contract}
 
 ## Stable Summary Requirement
 
@@ -167,6 +219,12 @@ def dry_run_report(run_id: str, prompt_path: Path) -> str:
 - Dry run enabled; Claude was not invoked.
 - Delegate artifacts were generated.
 
+Status
+PASS
+
+Role
+implementer
+
 Summary
 Dry run completed for RunId {run_id}.
 
@@ -176,107 +234,15 @@ None
 Verification
 - dry-run artifact generation only
 
+Findings
+- No findings in dry-run mode.
+
 Final Result
 PASS
 
 Risks Or Follow-ups
 - Inspect prompt before running without -DryRun: {prompt_path}
 """
-
-
-def update_workflow_record(
-    artifact_root: Path,
-    workflow_id: str,
-    run_id: str,
-    task_id: str,
-    role: str,
-    config_path: str,
-    status_path: str,
-    prompt_path: str,
-    output_path: str,
-    status_value: str,
-) -> None:
-    workflow_path = artifact_root / f"workflow_{workflow_id}.json"
-    if workflow_path.exists():
-        workflow = read_json(workflow_path)
-    else:
-        workflow = {
-            "workflowId": workflow_id,
-            "createdAt": now_iso(),
-            "updatedAt": now_iso(),
-            "runs": [],
-            "taskMap": {},
-        }
-
-    workflow.setdefault("runs", [])
-    workflow.setdefault("taskMap", {})
-    workflow["updatedAt"] = now_iso()
-    workflow["taskMap"][run_id] = {"taskId": task_id, "role": role}
-    workflow["runs"].append(
-        {
-            "runId": run_id,
-            "taskId": task_id,
-            "role": role,
-            "status": status_value,
-            "statusPath": status_path,
-            "configPath": config_path,
-            "promptPath": prompt_path,
-            "outputPath": output_path,
-            "updatedAt": now_iso(),
-        }
-    )
-    write_json(workflow_path, workflow)
-
-
-def update_workflow_status(context: dict[str, Any], status_value: str) -> None:
-    config = dict(context["config"])
-    workflow_id = str(config.get("workflowId") or "")
-    run_id = str(config.get("runId") or "")
-    if not workflow_id or not run_id:
-        return
-
-    artifact_root = Path(context["status_path"]).resolve().parent
-    workflow_path = artifact_root / f"workflow_{workflow_id}.json"
-    if not workflow_path.exists():
-        return
-
-    workflow = read_json(workflow_path)
-    runs = workflow.get("runs")
-    if not isinstance(runs, list):
-        return
-
-    for item in runs:
-        if isinstance(item, dict) and item.get("runId") == run_id:
-            item["status"] = status_value
-            item["updatedAt"] = now_iso()
-
-    workflow["updatedAt"] = now_iso()
-    write_json(workflow_path, workflow)
-
-
-def write_final_gate(
-    artifact_root: Path,
-    run_id: str,
-    workflow_id: str,
-    task_id: str,
-    validation_phase: str,
-    run_status: str,
-    gate_status: str,
-    reasons: list[str],
-) -> Path:
-    gate_path = artifact_root / f"final_gate_{run_id}.json"
-    gate_doc = {
-        "runId": run_id,
-        "workflowId": workflow_id,
-        "taskId": task_id,
-        "validationPhase": validation_phase,
-        "runStatus": run_status,
-        "gateStatus": gate_status,
-        "reasons": reasons,
-        "updatedAt": now_iso(),
-    }
-    write_json(gate_path, gate_doc)
-    return gate_path
 
 
 def prepare_run(ns: argparse.Namespace) -> dict[str, Any]:
@@ -294,6 +260,13 @@ def prepare_run(ns: argparse.Namespace) -> dict[str, Any]:
         raise DelegateError("Role is required.")
     if ns.role not in ALLOWED_ROLES:
         raise DelegateError(f"Role must be one of: {', '.join(sorted(ALLOWED_ROLES))}.")
+    if ns.work_mode not in WORK_MODES:
+        raise DelegateError("WorkMode must be one of: " + ", ".join(WORK_MODES) + ".")
+    if ns.role == "reviewer":
+        if not str(ns.review_for_task_id).strip():
+            raise DelegateError("ReviewForTaskId is required when Role is reviewer.")
+        if str(ns.review_kind).strip() not in STRICT_REVIEW_KINDS:
+            raise DelegateError("ReviewKind must be one of " + ", ".join(STRICT_REVIEW_KINDS) + " when Role is reviewer.")
     if ns.allow_parallel and not str(ns.scope).strip():
         raise DelegateError("Scope is required when AllowParallel is enabled.")
     if ns.validation_phase not in {"light", "full"}:
@@ -313,6 +286,15 @@ def prepare_run(ns: argparse.Namespace) -> dict[str, Any]:
 
     allowed_paths = normalize_items(ns.allowed_path)
     validation_commands = normalize_items(ns.validation_command)
+    test_commands = normalize_items(ns.tests)
+    depends_on = normalize_items(ns.depends_on)
+    if test_commands:
+        for command in test_commands:
+            if command not in validation_commands:
+                validation_commands.append(command)
+    ns.effective_work_mode = effective_work_mode(ns, task_text)
+    if ns.effective_work_mode == "strict":
+        validate_task_text(task_text, test_commands)
     session_key = safe_key(ns.session_key or f"{ns.task_mode}-default")
     fingerprint = task_fingerprint(ns.task_mode, task_text, allowed_paths, validation_commands, session_key)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3] + "_" + uuid.uuid4().hex[:8]
@@ -334,10 +316,16 @@ def prepare_run(ns: argparse.Namespace) -> dict[str, Any]:
 
     config: dict[str, Any] = {
         "artifactSchema": ARTIFACT_SCHEMA_VERSION,
+        "invocationContract": INVOCATION_CONTRACT,
         "runId": run_id,
         "workflowId": ns.workflow_id,
         "taskId": ns.task_id,
         "role": ns.role,
+        "workMode": ns.effective_work_mode,
+        "requestedWorkMode": ns.work_mode,
+        "reviewForTaskId": ns.review_for_task_id,
+        "reviewKind": ns.review_kind,
+        "dependsOn": depends_on,
         "scope": ns.scope,
         "validationPhase": ns.validation_phase,
         "repoRoot": str(root),
@@ -350,6 +338,7 @@ def prepare_run(ns: argparse.Namespace) -> dict[str, Any]:
         "fingerprint": fingerprint,
         "allowedPaths": allowed_paths,
         "validationCommands": validation_commands,
+        "tests": test_commands,
         "childThreadMarkerName": CHILD_MARKER_NAME,
         "childThreadMarkerValidated": True,
         "configPath": str(config_path),
@@ -403,6 +392,15 @@ def prepare_run(ns: argparse.Namespace) -> dict[str, Any]:
         run_id,
         ns.task_id,
         ns.role,
+        ns.effective_work_mode,
+        ns.scope,
+        allowed_paths,
+        validation_commands,
+        test_commands,
+        depends_on,
+        bool(ns.allow_parallel),
+        ns.review_for_task_id,
+        ns.review_kind,
         str(config_path),
         str(status_path),
         str(prompt_path),
@@ -437,7 +435,7 @@ def load_prepared_run(config_path: Path) -> tuple[SimpleNamespace, dict[str, Any
         session_mode=config["sessionMode"],
         round=int(config["round"]),
         max_round=int(config["maxRound"]),
-        max_parallel=int(runtime_options.get("maxParallel", 3)),
+        max_parallel=int(runtime_options.get("maxParallel", 5)),
         lease_ttl_seconds=int(runtime_options.get("leaseTtlSeconds", 7200)),
         lease_wait_seconds=int(runtime_options.get("leaseWaitSeconds", 60)),
         max_retry_count=int(runtime_options.get("maxRetryCount", 1)),
@@ -449,6 +447,11 @@ def load_prepared_run(config_path: Path) -> tuple[SimpleNamespace, dict[str, Any
         workflow_id=str(config.get("workflowId") or ""),
         task_id=str(config.get("taskId") or ""),
         role=str(config.get("role") or ""),
+        work_mode=str(config.get("workMode") or "fast"),
+        effective_work_mode=str(config.get("workMode") or "fast"),
+        requested_work_mode=str(config.get("requestedWorkMode") or config.get("workMode") or "auto"),
+        review_for_task_id=str(config.get("reviewForTaskId") or ""),
+        review_kind=str(config.get("reviewKind") or ""),
         scope=str(config.get("scope") or ""),
         validation_phase=str(config.get("validationPhase") or runtime_options.get("validationPhase") or "light"),
     )
@@ -552,13 +555,17 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
         changed_files = git_changed_files(root)
         out_of_scope = out_of_scope_files(changed_files, allowed_paths, root)
         output_text = read_text(output_path)
-        has_headings = has_required_headings(output_text)
+        work_mode = str(config.get("workMode") or getattr(ns, "effective_work_mode", "fast") or "fast")
+        strict_mode = work_mode == "strict"
+        has_headings = has_required_headings(output_text, strict=strict_mode)
         exit_code = int(result.get("exitCode") or 0)
         failed_reasons: list[str] = []
         if exit_code != 0:
             failed_reasons.append(f"Claude exited with code {exit_code}.")
         if not has_headings:
             failed_reasons.append("Claude report is missing required headings.")
+        if strict_mode and not report_is_accepted(output_text, strict=True):
+            failed_reasons.append("Strict report status/final result is not accepted.")
         if out_of_scope:
             failed_reasons.append("Changed files outside allowed paths: " + ", ".join(out_of_scope))
             write_text(
@@ -578,7 +585,9 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
             exit_code = 0
             if not ns.dry_run:
                 commit_session(lease, fingerprint, ns.lease_ttl_seconds)
-        if ns.validation_phase == "full":
+        if work_mode == "fast":
+            gate_status = "passed" if status_value == "completed" else "failed"
+        elif ns.validation_phase == "full":
             gate_status = "passed" if status_value == "completed" else "failed"
         else:
             gate_status = "pending_full_validation"
@@ -617,12 +626,14 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
         )
         write_json(status_path, status)
         update_workflow_status(context, status_value)
+        finalize_workflow_record(context, status_value, read_text(output_path))
 
         print(f"RunId: {run_id}")
         print(f"Status: {status_value}")
         print(f"WorkflowId: {config.get('workflowId', '')}")
         print(f"TaskId: {config.get('taskId', '')}")
         print(f"Role: {config.get('role', '')}")
+        print(f"WorkMode: {work_mode}")
         print(f"ValidationPhase: {config.get('validationPhase', '')}")
         print(f"SessionKey: {session_key}")
         print(f"SessionId: {lease.session_id}")
@@ -685,22 +696,27 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Codex Claude Loop delegate runtime")
     p.add_argument("--task-file", required=True)
     p.add_argument("--task-mode", choices=["implementation", "rework"], default="implementation")
+    p.add_argument("--work-mode", choices=["auto", "fast", "strict"], default="auto")
     p.add_argument("--session-mode", choices=["PrimaryReuse", "PrimaryAnchor", "ParallelPool"], default="PrimaryReuse")
     p.add_argument("--workflow-id", default="")
     p.add_argument("--task-id", default="")
     p.add_argument("--role", default="")
+    p.add_argument("--review-for-task-id", default="")
+    p.add_argument("--review-kind", choices=["", "spec", "quality"], default="")
+    p.add_argument("--depends-on", action="append", default=[])
     p.add_argument("--validation-phase", choices=["light", "full"], default="light")
     p.add_argument("--session-key", default="")
     p.add_argument("--scope", default="")
     p.add_argument("--allow-parallel", action="store_true")
     p.add_argument("--allowed-path", action="append", default=[])
     p.add_argument("--validation-command", action="append", default=[])
+    p.add_argument("--tests", action="append", default=[])
     p.add_argument("--artifact-root", default="")
     p.add_argument("--model", default="")
     p.add_argument("--name-prefix", default="codex-claude-loop")
     p.add_argument("--round", type=int, default=1)
     p.add_argument("--max-round", type=int, default=3)
-    p.add_argument("--max-parallel", type=int, default=3)
+    p.add_argument("--max-parallel", type=int, default=5)
     p.add_argument("--lease-ttl-seconds", type=int, default=7200)
     p.add_argument("--lease-wait-seconds", type=int, default=60)
     p.add_argument("--max-retry-count", type=int, default=1)

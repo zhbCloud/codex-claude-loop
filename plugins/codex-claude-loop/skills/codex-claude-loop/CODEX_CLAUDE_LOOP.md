@@ -70,7 +70,7 @@ Invalid transitions are rejected by the runtime helper module and should be trea
 Defaults:
 
 - Implementation rework rounds: 2
-- Parallel workers: 3
+- Parallel workers: 5
 
 If a limit is hit, Codex main thread must stop automatic looping and decide whether to continue manually, narrow the scope, or reject the task.
 
@@ -92,6 +92,33 @@ If a limit is hit, Codex main thread must stop automatic looping and decide whet
 - Independent pool slots for concurrent work.
 - Slots prefer matching task fingerprints to increase context and cache reuse.
 - A lease prevents two runs from writing to the same slot simultaneously.
+
+## Work Modes
+
+`WorkMode=fast` is the personal high-frequency path. It is intended for small, scoped changes and quick fixes where the main thread already understands the task. Fast mode keeps the compact report contract and allows a completed light-validation run to pass the run gate when headings, scope, and process status are clean.
+
+`WorkMode=strict` is the complex-project path. It requires a task-file contract before dispatch, uses the expanded report contract, records review metadata, and makes workflow verification require accepted `spec` and `quality` reviewer runs for implementer tasks plus an accepted `final-verifier` run.
+
+`WorkMode=auto` is the default. It selects strict mode for reviewer runs, final-verifier runs, writable parallel runs, or task files that already contain the strict contract sections; otherwise it selects fast mode.
+
+Strict task files must contain these sections:
+
+```text
+Goal
+Allowed Scope
+Forbidden Actions
+Acceptance Criteria
+Verification
+Report Requirements
+```
+
+Before strict dispatch, validate the task file:
+
+```powershell
+pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\validate_delegate_task.ps1 `
+  -TaskFile .\.codex\codex_claude_loop\tasks\<task>.md `
+  -Tests "pnpm run build"
+```
 
 ## Task Fingerprint
 
@@ -157,7 +184,7 @@ The status artifact may include:
 
 ## Required Claude Report
 
-Claude must finish with these exact headings:
+Fast-mode Claude reports must finish with these exact headings:
 
 ```text
 Process Log
@@ -167,6 +194,22 @@ Verification
 Final Result
 Risks Or Follow-ups
 ```
+
+Strict-mode Claude reports must finish with these exact headings:
+
+```text
+Process Log
+Status
+Role
+Summary
+Changed Files
+Verification
+Findings
+Final Result
+Risks Or Follow-ups
+```
+
+In strict mode, `Status` and `Final Result` must be accepted tokens, normally `PASS`, or the main thread must reject or rework the run.
 
 The report must include commands actually run and their outcomes. If validation is blocked, Claude must explain the blocker and whether it is related to the delegated change.
 
@@ -187,6 +230,7 @@ pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\delegate_to_cla
   -WorkflowId <workflow_id> `
   -TaskId <task_id> `
   -Role implementer `
+  -WorkMode auto `
   -ValidationPhase light `
   -TaskMode implementation `
   -SessionMode PrimaryReuse `
@@ -222,6 +266,8 @@ Recommended performance pattern:
 - Main-thread acceptance gate: run full validation (for example `pnpm run build`)
 - Final accept condition: `status_<run_id>.json.status=completed` and `final_gate_<run_id>.json.gateStatus=passed`
 
+In fast mode, a clean completed light-validation delegate run can pass its run gate for speed. In strict mode, light-validation runs remain `pending_full_validation` until full validation evidence is available.
+
 ## Workflow Metadata Policy
 
 Every delegate run must pass all three values:
@@ -229,8 +275,11 @@ Every delegate run must pass all three values:
 - `WorkflowId`
 - `TaskId`
 - `Role` (`planner`, `implementer`, `researcher`, `reviewer`, `final-verifier`)
+- `SessionKey`
 
 If `AllowParallel` is used for writable work, `Scope` is required.
+
+Reviewer runs must also pass `ReviewForTaskId` and `ReviewKind` (`spec` or `quality`).
 
 ## Risk Policy
 

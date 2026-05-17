@@ -121,7 +121,7 @@ function testDelegateCommandIsAllowed() {
         tool_name: "shell_command",
         cwd: root,
         tool_input: {
-          command: "$env:CODEX_CLAUDE_LOOP_CHILD_THREAD='1'; pwsh -File .\\delegate_to_claude.ps1 -TaskFile .\\.codex\\codex_claude_loop\\tasks\\a.md -WorkflowId wf -TaskId task -Role implementer"
+          command: "$env:CODEX_CLAUDE_LOOP_CHILD_THREAD='1'; pwsh -File .\\delegate_to_claude.ps1 -TaskFile .\\.codex\\codex_claude_loop\\tasks\\a.md -WorkflowId wf -TaskId task -Role implementer -SessionKey task"
         }
       },
       root
@@ -130,9 +130,29 @@ function testDelegateCommandIsAllowed() {
   });
 }
 
+function testDelegateCommandRequiresSessionKey() {
+  withTempWorkspace((root) => {
+    runHook({ hook_event_name: "UserPromptSubmit", cwd: root, prompt: "codex-claude-loop 执行" }, root);
+    const output = runHook(
+      {
+        hook_event_name: "PreToolUse",
+        tool_name: "shell_command",
+        cwd: root,
+        tool_input: {
+          command: "$env:CODEX_CLAUDE_LOOP_CHILD_THREAD='1'; pwsh -File .\\delegate_to_claude.ps1 -TaskFile .\\.codex\\codex_claude_loop\\tasks\\a.md -WorkflowId wf -TaskId task -Role implementer"
+        }
+      },
+      root
+    );
+    assert.equal(permission(output), "deny");
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /SessionKey/);
+  });
+}
+
 testPromptActivatesLoopMode();
 testApplyPatchToSourceIsDenied();
 testTaskFilePatchIsAllowed();
 testShellWriteIsDeniedButValidationAllowed();
 testDelegateCommandIsAllowed();
+testDelegateCommandRequiresSessionKey();
 console.log("ok");

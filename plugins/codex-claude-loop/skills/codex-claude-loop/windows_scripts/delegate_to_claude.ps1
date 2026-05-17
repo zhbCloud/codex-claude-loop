@@ -5,6 +5,9 @@ param(
   [ValidateSet("implementation", "rework")]
   [string]$TaskMode = "implementation",
 
+  [ValidateSet("auto", "fast", "strict")]
+  [string]$WorkMode = "auto",
+
   [ValidateSet("PrimaryReuse", "PrimaryAnchor", "ParallelPool")]
   [string]$SessionMode = "PrimaryReuse",
 
@@ -23,14 +26,19 @@ param(
   [switch]$AllowParallel,
   [ValidateSet("light", "full")]
   [string]$ValidationPhase = "light",
+  [string]$ReviewForTaskId = "",
+  [ValidateSet("", "spec", "quality")]
+  [string]$ReviewKind = "",
+  [string[]]$DependsOn = @(),
   [string[]]$AllowedPath = @(),
   [string[]]$ValidationCommand = @(),
+  [string[]]$Tests = @(),
   [string]$ArtifactRoot = "",
   [string]$Model = "",
   [string]$NamePrefix = "codex-claude-loop",
   [int]$Round = 1,
   [int]$MaxRound = 3,
-  [int]$MaxParallel = 3,
+  [int]$MaxParallel = 5,
   [int]$LeaseTtlSeconds = 7200,
   [int]$LeaseWaitSeconds = 60,
   [int]$MaxRetryCount = 1,
@@ -69,6 +77,7 @@ $runtimeArgs = @(
   $pythonScript,
   "--task-file", $TaskFile,
   "--task-mode", $TaskMode,
+  "--work-mode", $WorkMode,
   "--session-mode", $SessionMode,
   "--workflow-id", $WorkflowId,
   "--task-id", $TaskId,
@@ -89,6 +98,12 @@ if ($SessionKey) {
 if ($Scope) {
   $runtimeArgs += @("--scope", $Scope)
 }
+if ($ReviewForTaskId) {
+  $runtimeArgs += @("--review-for-task-id", $ReviewForTaskId)
+}
+if ($ReviewKind) {
+  $runtimeArgs += @("--review-kind", $ReviewKind)
+}
 if ($ArtifactRoot) {
   $runtimeArgs += @("--artifact-root", $ArtifactRoot)
 }
@@ -100,6 +115,12 @@ foreach ($item in $AllowedPath) {
 }
 foreach ($item in $ValidationCommand) {
   $runtimeArgs += @("--validation-command", $item)
+}
+foreach ($item in $DependsOn) {
+  $runtimeArgs += @("--depends-on", $item)
+}
+foreach ($item in $Tests) {
+  $runtimeArgs += @("--tests", $item)
 }
 if ($AllowParallel) {
   $runtimeArgs += "--allow-parallel"

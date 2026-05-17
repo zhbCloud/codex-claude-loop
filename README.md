@@ -28,13 +28,17 @@ When the user explicitly asks to use Codex Claude Loop, the Codex main thread sh
 - Reusable Claude sessions with `PrimaryReuse`, `PrimaryAnchor`, and `ParallelPool`.
 - Session leases to avoid concurrent writes to the same Claude session.
 - Audit artifacts under `.codex/codex_claude_loop/`.
+- Fast/strict work modes: fast mode for high-frequency small tasks, strict mode for complex projects with task contracts, reviewer evidence, and final-verifier gates.
 - Structured Claude reports with required headings.
+- Strict task-file validation through `windows_scripts/validate_delegate_task.ps1`.
 - Allowed-path diff checks when the target project is a Git repository; `-AllowedPath .`, `./`, or the repository root absolute path means the current repository scope.
 - Default bounded loop: implementation rework up to 2 rounds.
 
 ## Runtime Notes
 
 - In PowerShell, pass multiple validation commands as one array binding: `-ValidationCommand @("node --check src/a.js", "node --check src/b.js")`. Do not repeat the `-ValidationCommand` parameter name.
+- Use `-WorkMode fast` for simple, scoped personal tasks and `-WorkMode strict` for complex, parallel, migration, reviewer, or final-verifier workflows. The default `auto` mode stays fast unless the task shape requires strict evidence.
+- In strict mode, task files must include `Goal`, `Allowed Scope`, `Forbidden Actions`, `Acceptance Criteria`, `Verification`, and `Report Requirements`. Validate them with `windows_scripts/validate_delegate_task.ps1` before dispatch.
 - If a delegate returns `status=failed`, Codex main thread must not silently treat the worktree edits as accepted. It should create an explicit Claude rework task, or stop and ask the user whether to leave the loop workflow.
 - When the user prompt triggers `codex-claude-loop`, delegation, multi-agent, or Claude Code routing, the hook writes `.codex/codex_claude_loop/loop_mode.json` and enables loop mode. In loop mode, main-thread `apply_patch`, shell write commands, dependency installs, and other production-source writes are denied; `.codex/codex_claude_loop/` task files, child-thread delegate calls, and validation commands are allowed.
 - To disable loop mode, explicitly ask Codex to "disable codex-claude-loop loop mode" or "exit loop mode".

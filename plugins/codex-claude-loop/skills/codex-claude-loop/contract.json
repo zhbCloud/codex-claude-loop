@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "invocationContract": "codex_claude_loop_workflow",
+  "artifactSchemaVersion": 2,
+  "childThread": {
+    "markerName": "CODEX_CLAUDE_LOOP_CHILD_THREAD",
+    "markerValue": "1"
+  },
+  "spawn": {
+    "model": "gpt-5.3-codex",
+    "reasoningEffort": "medium",
+    "forkContext": false
+  },
+  "workModes": ["auto", "fast", "strict"],
+  "workerRoles": ["planner", "implementer", "researcher", "reviewer", "final-verifier"],
+  "reviewKinds": ["spec", "quality"],
+  "reportStatusValues": ["PASS", "PASS_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED", "FAIL"],
+  "fastReportHeadings": [
+    "Process Log",
+    "Summary",
+    "Changed Files",
+    "Verification",
+    "Final Result",
+    "Risks Or Follow-ups"
+  ],
+  "strictReportHeadings": [
+    "Process Log",
+    "Status",
+    "Role",
+    "Summary",
+    "Changed Files",
+    "Verification",
+    "Findings",
+    "Final Result",
+    "Risks Or Follow-ups"
+  ],
+  "triggerPatterns": [
+    "codex[-_\\s]?claude[-_\\s]?loop",
+    "Claude\\s+Code",
+    "child[- ]?agent",
+    "sub[- ]?agent",
+    "child[- ]?thread",
+    "sub[- ]?thread",
+    "delegat(?:e|ion|ing)",
+    "worker[- ]?execution",
+    "子代理|子线程|多代理|委派|派工|执行层"
+  ],
+  "spawnToolNames": ["spawn_agent", "task", "subagent", "agent", "worker"],
+  "delegateEntrypointPattern": "delegate_to_claude(?:\\.(?:ps1|sh|cmd|bat))?",
+  "requiredDelegateArgs": ["-TaskFile", "-WorkflowId", "-TaskId", "-Role", "-SessionKey"],
+  "reviewerRequiredArgs": ["-ReviewForTaskId", "-ReviewKind"],
+  "parallelRequiredArgs": ["-Scope"],
+  "legacy": {
+    "forbiddenArgs": ["-Task", "-Mode"],
+    "forbiddenClaudeArgs": ["--effort"]
+  },
+  "taskFile": {
+    "requiredSections": [
+      "Goal",
+      "Allowed Scope",
+      "Forbidden Actions",
+      "Acceptance Criteria",
+      "Verification",
+      "Report Requirements"
+    ],
+    "sectionAliases": {
+      "Goal": ["Goal", "Assignment", "Task", "目标"],
+      "Allowed Scope": ["Allowed Scope", "Scope", "Allowed Files", "允许范围"],
+      "Forbidden Actions": ["Forbidden Actions", "Out of Scope", "Forbidden Work", "禁止事项"],
+      "Acceptance Criteria": ["Acceptance Criteria", "Acceptance", "Self Check", "验收标准"],
+      "Verification": ["Verification", "Tests", "Required Verification", "验证"],
+      "Report Requirements": ["Report Requirements", "Worker Report", "Output Contract", "报告要求"]
+    }
+  }
+}
