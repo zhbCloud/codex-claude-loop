@@ -212,6 +212,16 @@ Run this in a `PowerShell terminal`:
 
 If the output looks like `codex-claude-loop/<version>`, that version is present in the Codex session context.
 
+If the command prints a very long prompt instead of just the version string, the final `.Matches.Value` was probably omitted. Use the full command above to print only the matched version.
+
+If you suspect the current terminal is calling a different Codex installation entry, check where `codex` resolves from:
+
+```powershell
+where.exe codex
+```
+
+This command is only for path troubleshooting. It lists the `codex` executable paths visible to the current `PowerShell terminal`, which helps diagnose multiple Codex installation entries causing version or cache confusion.
+
 ## Troubleshooting
 
 ### Codex Claude Loop Does Not Appear in the Plugin List
@@ -290,6 +300,8 @@ codex debug prompt-input "verify codex-claude-loop" | Select-String "codex-claud
 ```
 
 Seeing `codex-claude-loop:codex-claude-loop` usually means the plugin skill is present in the new session context.
+
+To check the exact plugin version, prefer the `.Matches.Value` command from the "Verify the Update" section. Without `.Matches.Value`, PowerShell may print the whole matching prompt line, which can look like a full prompt dump.
 
 ## Usage
 

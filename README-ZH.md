@@ -212,6 +212,16 @@ Marketplace `codex-claude-loop` is already up to date.
 
 如果输出类似 `codex-claude-loop/<version>`，说明该版本已经进入 Codex 会话上下文。
 
+如果命令输出的是整段很长的 prompt，而不是单独的版本号，通常是少了最后的 `.Matches.Value`。请使用上面的完整命令，只打印匹配到的版本字符串。
+
+如果怀疑当前终端调用了另一个 Codex 安装入口，可以检查 `codex` 命令实际来自哪里：
+
+```powershell
+where.exe codex
+```
+
+这个命令只用于排查路径问题。它会列出当前 `PowerShell 终端` 中可执行的 `codex` 文件路径，可帮助判断是否存在多个 Codex 安装入口导致的版本或缓存不一致。
+
 ## 常见问题与排障
 
 ### 插件列表里看不到 Codex Claude Loop
@@ -292,6 +302,8 @@ codex debug prompt-input "验证 codex-claude-loop" | Select-String "codex-claud
 ```
 
 看到 `codex-claude-loop:codex-claude-loop` 通常说明插件 skill 已进入新会话上下文。
+
+如果要检查具体插件版本，建议使用“验证是否已更新”小节中的 `.Matches.Value` 命令，否则 PowerShell 可能会打印整段匹配行，看起来像输出了完整 prompt。
 
 ## 使用方式
 
