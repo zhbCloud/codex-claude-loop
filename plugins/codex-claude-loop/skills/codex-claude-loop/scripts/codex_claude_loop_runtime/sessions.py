@@ -73,11 +73,13 @@ def _new_state(session_key: str) -> dict[str, Any]:
         "updatedAt": now_iso(),
         "primary": {
             "sessionId": None,
+            "pendingSessionId": None,
             "status": "available",
             "leaseRunId": None,
             "leasedAt": None,
             "lastUsedAt": None,
             "lastRunId": None,
+            "validatedAt": None,
         },
         "parallelPool": [],
     }
@@ -133,12 +135,14 @@ def acquire_session(
             slot = state["primary"]
             if _leased(slot, lease_ttl_seconds):
                 raise DelegateError(f"Primary Claude session is already leased for SessionKey={session_key}")
-            resume = bool(slot.get("sessionId"))
+            resume = bool(slot.get("sessionId") and slot.get("validatedAt"))
+            session_id = str(slot["sessionId"]) if resume else str(uuid.uuid4())
             if not resume:
-                slot["sessionId"] = str(uuid.uuid4())
+                slot["sessionId"] = None
+                slot["pendingSessionId"] = session_id
             slot.update({"status": "leased", "leaseRunId": run_id, "leasedAt": now_iso()})
             write_json(state_path, state)
-            return SessionLease(session_key, session_mode, str(slot["sessionId"]), resume, "primary", state_path, lock_path, run_id)
+            return SessionLease(session_key, session_mode, session_id, resume, "primary", state_path, lock_path, run_id)
 
         pool = state["parallelPool"]
         max_parallel = max(1, max_parallel)
@@ -148,12 +152,14 @@ def acquire_session(
                 candidates.append((index, slot, slot.get("lastTaskFingerprint") == fingerprint))
         if not candidates and len(pool) < max_parallel:
             slot = {
-                "sessionId": str(uuid.uuid4()),
+                "sessionId": None,
+                "pendingSessionId": None,
                 "status": "available",
                 "leaseRunId": None,
                 "leasedAt": None,
                 "lastUsedAt": None,
                 "lastRunId": None,
+                "validatedAt": None,
                 "lastTaskFingerprint": fingerprint,
             }
             pool.append(slot)
@@ -162,9 +168,11 @@ def acquire_session(
             raise DelegateError(f"No available ParallelPool slots for SessionKey={session_key}; maxParallel={max_parallel}")
         candidates.sort(key=lambda item: (0 if item[2] else 1, item[1].get("lastUsedAt") or ""))
         index, slot, _ = candidates[0]
-        resume = bool(slot.get("sessionId"))
+        resume = bool(slot.get("sessionId") and slot.get("validatedAt"))
+        session_id = str(slot["sessionId"]) if resume else str(uuid.uuid4())
         if not resume:
-            slot["sessionId"] = str(uuid.uuid4())
+            slot["sessionId"] = None
+            slot["pendingSessionId"] = session_id
         slot.update(
             {
                 "status": "leased",
@@ -174,7 +182,31 @@ def acquire_session(
             }
         )
         write_json(state_path, state)
-        return SessionLease(session_key, session_mode, str(slot["sessionId"]), resume, f"parallel-{index}", state_path, lock_path, run_id)
+        return SessionLease(session_key, session_mode, session_id, resume, f"parallel-{index}", state_path, lock_path, run_id)
+
+
+def commit_session(lease: SessionLease, fingerprint: str, lease_ttl_seconds: int) -> None:
+    with AtomicLock(lease.lock_path, lease_ttl_seconds, 30):
+        state = _read_state(lease.state_path, lease.session_key)
+        now = now_iso()
+        if lease.slot_name == "primary":
+            slot = state["primary"]
+            if slot.get("leaseRunId") != lease.run_id:
+                return
+        else:
+            index = int(lease.slot_name.split("-", 1)[1])
+            if index < 0 or index >= len(state["parallelPool"]):
+                return
+            slot = state["parallelPool"][index]
+            if slot.get("leaseRunId") != lease.run_id:
+                return
+            slot["lastTaskFingerprint"] = fingerprint
+
+        slot["sessionId"] = lease.session_id
+        slot["pendingSessionId"] = None
+        slot["validatedAt"] = now
+        state["updatedAt"] = now
+        write_json(lease.state_path, state)
 
 
 def release_session(lease: SessionLease, fingerprint: str, lease_ttl_seconds: int) -> None:
@@ -185,12 +217,16 @@ def release_session(lease: SessionLease, fingerprint: str, lease_ttl_seconds: in
             if lease.slot_name == "primary":
                 slot = state["primary"]
                 if slot.get("leaseRunId") == lease.run_id:
+                    if slot.get("pendingSessionId") == lease.session_id:
+                        slot["pendingSessionId"] = None
                     slot.update({"status": "available", "leaseRunId": None, "leasedAt": None, "lastUsedAt": now, "lastRunId": lease.run_id})
             else:
                 index = int(lease.slot_name.split("-", 1)[1])
                 if 0 <= index < len(state["parallelPool"]):
                     slot = state["parallelPool"][index]
                     if slot.get("leaseRunId") == lease.run_id:
+                        if slot.get("pendingSessionId") == lease.session_id:
+                            slot["pendingSessionId"] = None
                         slot.update(
                             {
                                 "status": "available",

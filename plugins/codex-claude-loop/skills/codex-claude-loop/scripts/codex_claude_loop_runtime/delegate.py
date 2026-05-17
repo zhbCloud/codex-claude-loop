@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -15,7 +16,7 @@ from .claude_cli import run_claude, write_startup_failure
 from .common import ARTIFACT_SCHEMA_VERSION, CHILD_MARKER_NAME, CHILD_MARKER_VALUE, DelegateError, has_required_headings, now_iso
 from .fingerprint import safe_key, task_fingerprint
 from .io_utils import ensure_writable, read_json, read_text, write_json, write_text
-from .sessions import SessionLease, acquire_session, release_session
+from .sessions import SessionLease, acquire_session, commit_session, release_session
 from .state_machine import state_for_task_mode
 
 ALLOWED_ROLES = {"planner", "implementer", "researcher", "reviewer", "final-verifier"}
@@ -120,13 +121,42 @@ def git_changed_files(root: Path) -> list[str]:
     return [line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()]
 
 
-def out_of_scope_files(changed_files: list[str], allowed_paths: list[str]) -> list[str]:
+def _normalize_allowed_path(root: Path, allowed_path: str) -> str:
+    raw = str(allowed_path).replace("\\", "/").strip()
+    if raw in {"", ".", "./"}:
+        return ""
+
+    candidate_path = Path(raw)
+    if candidate_path.is_absolute():
+        try:
+            raw = candidate_path.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            return posixpath.normpath(raw).strip("/").lower()
+
+    normalized = posixpath.normpath(raw).strip("/").lower()
+    if normalized == ".":
+        return ""
+    return normalized
+
+
+def normalize_allowed_paths(root: Path, allowed_paths: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for item in allowed_paths:
+        value = _normalize_allowed_path(root, item)
+        if value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def out_of_scope_files(changed_files: list[str], allowed_paths: list[str], root: Path | None = None) -> list[str]:
     if not allowed_paths:
         return []
-    normalized_allowed = [item.replace("\\", "/").strip("/").lower() for item in allowed_paths]
+    normalized_allowed = normalize_allowed_paths(root or repo_root(), allowed_paths)
+    if "" in normalized_allowed:
+        return []
     out: list[str] = []
     for file in changed_files:
-        candidate = file.replace("\\", "/").strip("/").lower()
+        candidate = posixpath.normpath(file.replace("\\", "/")).strip("/").lower()
         if not any(candidate == prefix or candidate.startswith(prefix.rstrip("/") + "/") for prefix in normalized_allowed):
             out.append(file)
     return out
@@ -520,7 +550,7 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
             write_text(output_path, final_text)
 
         changed_files = git_changed_files(root)
-        out_of_scope = out_of_scope_files(changed_files, allowed_paths)
+        out_of_scope = out_of_scope_files(changed_files, allowed_paths, root)
         output_text = read_text(output_path)
         has_headings = has_required_headings(output_text)
         exit_code = int(result.get("exitCode") or 0)
@@ -546,6 +576,8 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
         else:
             status_value = "completed"
             exit_code = 0
+            if not ns.dry_run:
+                commit_session(lease, fingerprint, ns.lease_ttl_seconds)
         if ns.validation_phase == "full":
             gate_status = "passed" if status_value == "completed" else "failed"
         else:

@@ -29,6 +29,8 @@ The Codex main thread must not run `claude` directly and must not run `windows_s
 - Review diff, validation output, artifacts, risks, and scope.
 - Accept or reject the work. Claude cannot self-approve final acceptance.
 - If rejected, delegate rework with precise findings and a bounded round count.
+- When the user explicitly asks to use Codex Claude Loop, do not directly edit production source files or implement fallback fixes in the main thread. If delegation fails, adjust the task/scope/session and delegate rework, inspect artifacts, run verification, or report the blocker.
+- If host hooks are available, loop mode is enforced at `PreToolUse`: production-source writes from the main thread are denied while `.codex/codex_claude_loop/` task/artifact writes, child-thread delegate calls, and validation commands are allowed.
 
 ## Main Thread Progress Checks
 
@@ -54,6 +56,8 @@ The Codex child thread must:
 - Use `-ValidationPhase light` for the delegate pass, then run full validation at main-thread acceptance.
 - Pass `-SessionKey` for stable context reuse.
 - Pass `-AllowedPath` and `-ValidationCommand` whenever the main thread has defined scope and verification.
+- Use `-AllowedPath .` for approved repo-wide migrations or sweeps that intentionally include root config files. The runtime treats `.`, `./`, and the repo root absolute path as the whole repository.
+- For multiple validation commands in PowerShell, pass one array binding, e.g. `-ValidationCommand @("node --check src/a.js", "node --check src/b.js")`.
 - Pass `-AllowParallel -Scope <path-or-scope>` for writable parallel runs.
 - Return the artifact paths, changed files, validation result, and risks to the main thread.
 - Default behavior is asynchronous startup (`StartOnly` path). Use `-WaitForCompletion` only when blocking execution is explicitly needed.
@@ -125,6 +129,8 @@ Only accept when both are true:
 
 - `status_<run_id>.json` shows `status=completed`
 - `final_gate_<run_id>.json` shows `gateStatus=passed`
+
+If either condition fails, reject the run or delegate rework. Do not silently accept failed artifacts by making direct main-thread source edits.
 
 When you need aggregated progress for a whole workflow:
 

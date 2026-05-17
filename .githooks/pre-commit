@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$repo_root/scripts/bump-plugin-version.ps1"
+git -C "$repo_root" add plugins/codex-claude-loop/.codex-plugin/plugin.json

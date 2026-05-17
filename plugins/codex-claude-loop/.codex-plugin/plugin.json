@@ -1,6 +1,6 @@
 {
   "name": "codex-claude-loop",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "A Windows-first Codex plugin for Codex-led planning, Claude Code implementation, rework loops, and reusable Claude sessions.",
   "author": {
     "name": "local"

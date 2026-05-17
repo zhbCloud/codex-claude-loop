@@ -10,6 +10,8 @@ Codex main thread -> Codex child agent -> plugin delegate runtime -> Claude CLI
 
 Codex owns requirement analysis, planning, task decomposition, scheduling, risk judgment, code review, and final acceptance. Claude Code only acts as the implementation layer inside a Codex child agent, executing approved Codex tasks such as writing code, editing files, running specified validation commands, and applying Codex-requested rework.
 
+When the user explicitly asks to use Codex Claude Loop, the Codex main thread should not directly edit production source files as a fallback implementation path. If delegation fails, Codex should adjust the task, scope, session, or validation command and delegate rework, or report the blocker to the user.
+
 ## Important Limitations
 
 - This plugin currently targets Windows only.
@@ -27,8 +29,15 @@ Codex owns requirement analysis, planning, task decomposition, scheduling, risk 
 - Session leases to avoid concurrent writes to the same Claude session.
 - Audit artifacts under `.codex/codex_claude_loop/`.
 - Structured Claude reports with required headings.
-- Allowed-path diff checks when the target project is a Git repository.
+- Allowed-path diff checks when the target project is a Git repository; `-AllowedPath .`, `./`, or the repository root absolute path means the current repository scope.
 - Default bounded loop: implementation rework up to 2 rounds.
+
+## Runtime Notes
+
+- In PowerShell, pass multiple validation commands as one array binding: `-ValidationCommand @("node --check src/a.js", "node --check src/b.js")`. Do not repeat the `-ValidationCommand` parameter name.
+- If a delegate returns `status=failed`, Codex main thread must not silently treat the worktree edits as accepted. It should create an explicit Claude rework task, or stop and ask the user whether to leave the loop workflow.
+- When the user prompt triggers `codex-claude-loop`, delegation, multi-agent, or Claude Code routing, the hook writes `.codex/codex_claude_loop/loop_mode.json` and enables loop mode. In loop mode, main-thread `apply_patch`, shell write commands, dependency installs, and other production-source writes are denied; `.codex/codex_claude_loop/` task files, child-thread delegate calls, and validation commands are allowed.
+- To disable loop mode, explicitly ask Codex to "disable codex-claude-loop loop mode" or "exit loop mode".
 
 ## Installation
 
@@ -378,3 +387,21 @@ Use codex-claude-loop to rework the previous implementation: <describe what must
 ```
 
 Most users do not need to run the internal delegate script directly. Trigger the plugin from Codex App, the Codex CLI interactive interface, or a natural-language command such as `codex -C ... "Use codex-claude-loop ..."`.
+
+## Development
+
+### Automatic Plugin Version Bump
+
+When changing plugin capability files, enable the repository git hook once:
+
+```powershell
+pwsh -NoProfile -File .\scripts\install-git-hooks.ps1
+```
+
+The pre-commit hook runs `scripts/bump-plugin-version.ps1`. If files under `plugins/codex-claude-loop/skills/`, `plugins/codex-claude-loop/hooks/`, or `plugins/codex-claude-loop/.codex-plugin/plugin.json` changed and the manifest version was not already edited, it bumps the plugin manifest patch version and stages it.
+
+For CI or manual checks without editing files, run:
+
+```powershell
+pwsh -NoProfile -File .\scripts\bump-plugin-version.ps1 -CheckOnly
+```

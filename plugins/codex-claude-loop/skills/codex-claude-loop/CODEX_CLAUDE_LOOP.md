@@ -22,6 +22,8 @@ The Codex main thread must not invoke `claude` directly. The Codex main thread m
 
 The plugin includes a hook gate at `hooks/hooks.json` to reinforce this route and deny non-compliant delegation tool calls when the host supports hooks.
 
+When a user prompt activates Codex Claude Loop, the hook records loop mode in `.codex/codex_claude_loop/loop_mode.json`. While active, main-thread production-source writes are denied at `PreToolUse`; task files under `.codex/codex_claude_loop/`, child-thread delegate calls, and validation commands remain allowed. Users can explicitly disable it by asking to disable or exit loop mode.
+
 ## Roles
 
 Codex main thread:
@@ -30,6 +32,7 @@ Codex main thread:
 - Writes and approves the plan before delegation.
 - Reviews Claude's implementation diff and verification.
 - Makes the final accept/reject decision.
+- When the user explicitly asks to use Codex Claude Loop, does not directly edit production source files or implement fallback fixes in the main thread. If a delegate fails, the main thread may adjust the task, allowed paths, session key, or validation plan and delegate rework; inspect artifacts; run verification; or report the blocker to the user.
 
 Codex child thread:
 
@@ -171,6 +174,8 @@ The report must include commands actually run and their outcomes. If validation 
 
 The main thread should pass allowed paths with `-AllowedPath`.
 
+Use `-AllowedPath .` only when the approved task genuinely owns the current repository-level diff, such as migration-wide sweeps where `package.json`, config files, and source files are expected to change. The runtime treats `.`, `./`, and the repository root absolute path as the whole repo.
+
 When the target workspace is a Git repository, the delegate runtime checks `git diff --name-only` after Claude returns. If changed files are outside the allowed paths, the run is marked failed and must be reviewed or reworked.
 
 ## Standard Delegate Command (Child Thread)
@@ -188,6 +193,12 @@ pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\delegate_to_cla
   -SessionKey <session_key> `
   -AllowedPath src `
   -ValidationCommand "pnpm run build"
+```
+
+For multiple validation commands in PowerShell, pass an array in one parameter binding:
+
+```powershell
+-ValidationCommand @("node --check src/common/pwdEncryption.js", "node --check src/mock/index.js")
 ```
 
 This command starts asynchronously by default and returns `RunId`/artifact paths quickly. Add `-WaitForCompletion` only when you explicitly want blocking behavior.
@@ -247,3 +258,5 @@ This helps later resumed sessions avoid repeated reading and modeling.
 ## Final Responsibility
 
 Final acceptance belongs only to Codex main thread. Claude can say that its delegated task passed, but cannot declare the whole user request accepted.
+
+If a run has `status=failed`, Codex must not silently accept its implementation. It may salvage the findings only by creating an explicit rework task for Claude, or by stopping and asking the user whether to leave the loop workflow.
