@@ -9,7 +9,7 @@ The delegate runtime is only valid inside a Codex child agent.
 Required chain:
 
 ```text
-Codex main thread -> Codex child agent -> delegate_to_claude.ps1 -> delegate_to_claude.py -> Claude CLI
+Codex main thread -> Codex child agent -> platform delegate wrapper -> delegate_to_claude.py -> Claude CLI
 ```
 
 The delegate runtime rejects execution unless this environment variable is present:
@@ -101,6 +101,17 @@ If a limit is hit, Codex main thread must stop automatic looping and decide whet
 
 `WorkMode=auto` is the default. It selects strict mode for reviewer runs, final-verifier runs, writable parallel runs, or task files that already contain the strict contract sections; otherwise it selects fast mode.
 
+## Workflow Phases
+
+The plugin intentionally keeps one public skill entrypoint. To preserve clear responsibilities without multiplying skill files, the main thread should run larger tasks through these phases:
+
+- Planning: capture user requirements, allowed paths, forbidden actions, acceptance criteria, verification commands, work mode, session key, and risk level.
+- Dispatching: create or validate the task file, select role/session/parallel options, and send the work through a Codex child thread only.
+- Reviewing: inspect `status_<run_id>.json`, `final_gate_<run_id>.json`, `claude_<run_id>.md`, changed files, scope checks, reviewer evidence, and reported validation.
+- Finishing: run workflow verification, run main-thread full validation when required, decide accept/rework/reject, and summarize risks for the user.
+
+The plugin supports Windows through `windows_scripts/delegate_to_claude.ps1` and macOS through `macos_scripts/delegate_to_claude.sh`. Both platforms use the same Python runtime and artifact contract. Linux entrypoints are not provided or validated. macOS wrapper support starts in plugin version `0.4.2`; after `codex plugin marketplace upgrade codex-claude-loop`, restart Codex Desktop or open a new session before relying on the updated plugin cache. On macOS GUI sessions, the runtime checks `PATH` first, then common Claude CLI locations such as `/opt/homebrew/bin/claude` and `/usr/local/bin/claude`.
+
 Strict task files must contain these sections:
 
 ```text
@@ -118,6 +129,14 @@ Before strict dispatch, validate the task file:
 pwsh -NoProfile -File .\skills\codex-claude-loop\windows_scripts\validate_delegate_task.ps1 `
   -TaskFile .\.codex\codex_claude_loop\tasks\<task>.md `
   -Tests "pnpm run build"
+```
+
+On macOS:
+
+```zsh
+./skills/codex-claude-loop/macos_scripts/validate_delegate_task.sh \
+  --task-file ./.codex/codex_claude_loop/tasks/<task>.md \
+  --tests "pnpm run build"
 ```
 
 ## Task Fingerprint
@@ -160,14 +179,16 @@ Workflow-level artifact:
 - `workflow_<workflow_id>.json`
 - `final_gate_<run_id>.json`
 
+All newly generated artifacts use artifact schema v3. Version 3 covers run-level gates, workflow task metadata, reviewer evidence, final-verifier records, declared validation evidence, and parallel scope checks.
+
 ## Progress Monitoring Policy
 
 The main thread should treat `status_<run_id>.json` as the primary progress surface. This keeps progress checks cheap and avoids repeated model/tool cycles caused by tailing raw stream logs.
 
 Recommended behavior:
 
-- Poll `status_<run_id>.json` with backoff, or call `windows_scripts/watch_delegate_status.ps1 -RunId <run_id> -Watch`.
-- For multi-run orchestration, call `windows_scripts/watch_delegate_status.ps1 -WorkflowId <workflow_id> -Watch`.
+- Poll `status_<run_id>.json` with backoff, or call `windows_scripts/watch_delegate_status.ps1 -RunId <run_id> -Watch` on Windows or `macos_scripts/watch_delegate_status.sh --run-id <run_id> --watch` on macOS.
+- For multi-run orchestration, call the same platform watcher with `-WorkflowId` on Windows or `--workflow-id` on macOS.
 - Do not repeatedly run `Get-Content -Tail` on `stream_<run_id>.jsonl` during normal progress checks.
 - Inspect `stream_<run_id>.jsonl` only when the run is failed, stalled, timed out, or the user explicitly asks for raw stream diagnostics.
 - Inspect `claude_<run_id>.md` only after the run reaches `completed` or `failed`.
@@ -209,7 +230,7 @@ Final Result
 Risks Or Follow-ups
 ```
 
-In strict mode, `Status` and `Final Result` must be accepted tokens, normally `PASS`, or the main thread must reject or rework the run.
+Accepted tokens are `PASS` and `PASS_WITH_CONCERNS`. In strict mode, both `Status` and `Final Result` must use an accepted token, or the main thread must reject, rework, or ask for missing context.
 
 The report must include commands actually run and their outcomes. If validation is blocked, Claude must explain the blocker and whether it is related to the delegated change.
 
@@ -247,6 +268,26 @@ For multiple validation commands in PowerShell, pass an array in one parameter b
 
 This command starts asynchronously by default and returns `RunId`/artifact paths quickly. Add `-WaitForCompletion` only when you explicitly want blocking behavior.
 The delegate wrapper emits a JSON result line with `state` (`started`, `completed`, `failed`). Upstream schedulers must read this field instead of treating process return as completion semantics.
+
+macOS child-thread command:
+
+```zsh
+export CODEX_CLAUDE_LOOP_CHILD_THREAD=1
+./skills/codex-claude-loop/macos_scripts/delegate_to_claude.sh \
+  --task-file ./.codex/codex_claude_loop/tasks/<task>.md \
+  --workflow-id <workflow_id> \
+  --task-id <task_id> \
+  --role implementer \
+  --work-mode auto \
+  --validation-phase light \
+  --task-mode implementation \
+  --session-mode PrimaryReuse \
+  --session-key <session_key> \
+  --allowed-path src \
+  --validation-command "pnpm run build"
+```
+
+The macOS wrapper runs the shared Python delegate in the foreground. Pass repeated options such as `--allowed-path` and `--validation-command` once per value.
 
 For writable parallel runs, also pass:
 

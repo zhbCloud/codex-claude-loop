@@ -9,7 +9,7 @@ _CHILD_THREAD = _CONTRACT.get("childThread") if isinstance(_CONTRACT.get("childT
 
 CHILD_MARKER_NAME = str(_CHILD_THREAD.get("markerName") or "CODEX_CLAUDE_LOOP_CHILD_THREAD")
 CHILD_MARKER_VALUE = str(_CHILD_THREAD.get("markerValue") or "1")
-ARTIFACT_SCHEMA_VERSION = int(_CONTRACT.get("artifactSchemaVersion") or 2)
+ARTIFACT_SCHEMA_VERSION = int(_CONTRACT.get("artifactSchemaVersion") or 3)
 INVOCATION_CONTRACT = str(_CONTRACT.get("invocationContract") or "codex_claude_loop_workflow")
 WORK_MODES = tuple(str(item) for item in (_CONTRACT.get("workModes") or ["auto", "fast", "strict"]))
 STRICT_REVIEW_KINDS = tuple(str(item) for item in (_CONTRACT.get("reviewKinds") or ["spec", "quality"]))

@@ -15,3 +15,26 @@ jobs:
       - name: Run plugin doctor
         shell: pwsh
         run: ./scripts/doctor.ps1 -SkipCodexCli -SkipCodexRead
+
+  validate-macos:
+    name: Validate macOS wrappers
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check zsh syntax
+        shell: zsh {0}
+        run: zsh -n plugins/codex-claude-loop/skills/codex-claude-loop/macos_scripts/*.sh
+
+      - name: Smoke test shared runtime wrappers
+        shell: zsh {0}
+        run: |
+          ./plugins/codex-claude-loop/skills/codex-claude-loop/macos_scripts/validate_delegate_task.sh --help
+          ./plugins/codex-claude-loop/skills/codex-claude-loop/macos_scripts/watch_delegate_status.sh --help
+
+      - name: Run macOS compatibility tests
+        run: |
+          python3 ./scripts/test_macos_compatibility.py
+          python3 ./scripts/test_watch_delegate_status.py
+          python3 ./scripts/test_documentation_contract.py

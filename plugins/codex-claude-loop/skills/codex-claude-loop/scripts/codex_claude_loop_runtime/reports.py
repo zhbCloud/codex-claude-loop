@@ -30,7 +30,8 @@ def report_token(text: str, heading: str) -> str:
 def report_is_accepted(text: str, strict: bool) -> bool:
     final_token = report_token(text, "Final Result")
     status_token = report_token(text, "Status")
-    accepted = final_token in {"PASS", "DONE"}
+    accepted_tokens = {"PASS", "PASS_WITH_CONCERNS", "DONE", "DONE_WITH_CONCERNS"}
+    accepted = final_token in accepted_tokens
     if strict:
-        accepted = accepted and status_token in {"PASS", "DONE"}
+        accepted = accepted and status_token in accepted_tokens
     return accepted

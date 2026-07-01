@@ -56,7 +56,7 @@ Write-Host 'Codex Claude Loop doctor'
 Write-Host "Repository: $RepoRoot"
 
 if (-not $IsWindows) {
-  Add-Failure 'This plugin is Windows-only. Run installation and runtime checks on Windows.'
+  Add-Failure 'This doctor runs on Windows. For macOS repository checks, run python3 ./scripts/test_macos_compatibility.py and python3 ./scripts/test_documentation_contract.py.'
 } else {
   Write-Host '[ok] Windows detected'
 }

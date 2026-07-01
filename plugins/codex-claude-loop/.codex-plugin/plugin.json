@@ -1,7 +1,7 @@
 {
   "name": "codex-claude-loop",
-  "version": "0.4.0",
-  "description": "A Windows-first Codex plugin for Codex-led planning, Claude Code implementation, rework loops, and reusable Claude sessions.",
+  "version": "0.4.2",
+  "description": "A Windows and macOS Codex plugin for Codex-led planning, Claude Code implementation, rework loops, and reusable Claude sessions.",
   "author": {
     "name": "local"
   },
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "Codex Claude Loop",
     "shortDescription": "Codex leads planning, review, and acceptance while Claude Code handles implementation through a constrained child-thread loop.",
-    "longDescription": "Provides a Codex-led implementation-and-rework workflow with a Windows delegate runtime, child-thread enforcement, reusable Claude sessions, parallel pools, audit artifacts, scoped diffs, and bounded review loops.",
+    "longDescription": "Provides a Codex-led implementation-and-rework workflow for Windows and macOS with a shared Python delegate runtime, child-thread enforcement, reusable Claude sessions, parallel pools, audit artifacts, scoped diffs, and bounded review loops.",
     "developerName": "local",
     "category": "Development",
     "capabilities": [

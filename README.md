@@ -2,7 +2,7 @@
 
 [中文说明](./README-ZH.md)
 
-Codex Claude Loop is a **Windows-only Codex plugin** for a strict Codex-led planning, delegation, implementation, rework, and acceptance workflow:
+Codex Claude Loop is a **Windows and macOS Codex plugin** for a strict Codex-led planning, delegation, implementation, rework, and acceptance workflow:
 
 ```text
 Codex main thread -> Codex child agent -> plugin delegate runtime -> Claude CLI
@@ -14,11 +14,12 @@ When the user explicitly asks to use Codex Claude Loop, the Codex main thread sh
 
 ## Important Limitations
 
-- This plugin currently targets Windows only.
-- PowerShell 7+ is recommended.
-- Delegate scripts live under `plugins/codex-claude-loop/skills/codex-claude-loop/windows_scripts/`.
-- macOS and Linux delegate scripts are not provided.
+- Windows uses PowerShell 7+ wrappers under `plugins/codex-claude-loop/skills/codex-claude-loop/windows_scripts/`.
+- macOS uses the system `zsh` and Python 3.10+ wrappers under `plugins/codex-claude-loop/skills/codex-claude-loop/macos_scripts/`.
+- The delegate entrypoints are `windows_scripts/delegate_to_claude.ps1` and `macos_scripts/delegate_to_claude.sh`.
+- Linux delegate scripts are not provided or validated.
 - Claude CLI must be installed and logged in if you want the runtime to actually call Claude.
+- On macOS, Codex Desktop may start with a reduced GUI `PATH`; the runtime checks `PATH` first, then common Claude CLI locations such as `/opt/homebrew/bin/claude` and `/usr/local/bin/claude`.
 
 ## What It Provides
 
@@ -28,17 +29,20 @@ When the user explicitly asks to use Codex Claude Loop, the Codex main thread sh
 - Reusable Claude sessions with `PrimaryReuse`, `PrimaryAnchor`, and `ParallelPool`.
 - Session leases to avoid concurrent writes to the same Claude session.
 - Audit artifacts under `.codex/codex_claude_loop/`.
+- Artifact schema v3 for run gates, workflow records, reviewer evidence, and final-verifier acceptance.
 - Fast/strict work modes: fast mode for high-frequency small tasks, strict mode for complex projects with task contracts, reviewer evidence, and final-verifier gates.
 - Structured Claude reports with required headings.
-- Strict task-file validation through `windows_scripts/validate_delegate_task.ps1`.
-- Allowed-path diff checks when the target project is a Git repository; `-AllowedPath .`, `./`, or the repository root absolute path means the current repository scope.
+- Strict task-file validation through `windows_scripts/validate_delegate_task.ps1` or `macos_scripts/validate_delegate_task.sh`.
+- Allowed-path diff checks when the target project is a Git repository; `-AllowedPath .` on Windows or `--allowed-path .` on macOS means the current repository scope.
 - Default bounded loop: implementation rework up to 2 rounds.
 
 ## Runtime Notes
 
 - In PowerShell, pass multiple validation commands as one array binding: `-ValidationCommand @("node --check src/a.js", "node --check src/b.js")`. Do not repeat the `-ValidationCommand` parameter name.
+- In macOS `zsh`, repeat long options once per value, for example `--validation-command "node --check src/a.js" --validation-command "node --check src/b.js"`.
 - Use `-WorkMode fast` for simple, scoped personal tasks and `-WorkMode strict` for complex, parallel, migration, reviewer, or final-verifier workflows. The default `auto` mode stays fast unless the task shape requires strict evidence.
-- In strict mode, task files must include `Goal`, `Allowed Scope`, `Forbidden Actions`, `Acceptance Criteria`, `Verification`, and `Report Requirements`. Validate them with `windows_scripts/validate_delegate_task.ps1` before dispatch.
+- The workflow is documented as four phases inside the single plugin skill: planning, dispatching, reviewing, and finishing. Windows and macOS share one Python runtime and artifact contract; Linux remains outside the supported platform boundary.
+- In strict mode, task files must include `Goal`, `Allowed Scope`, `Forbidden Actions`, `Acceptance Criteria`, `Verification`, and `Report Requirements`. Validate them with the platform-specific script before dispatch.
 - If a delegate returns `status=failed`, Codex main thread must not silently treat the worktree edits as accepted. It should create an explicit Claude rework task, or stop and ask the user whether to leave the loop workflow.
 - When the user prompt triggers `codex-claude-loop`, delegation, multi-agent, or Claude Code routing, the hook writes `.codex/codex_claude_loop/loop_mode.json` and enables loop mode. In loop mode, main-thread `apply_patch`, shell write commands, dependency installs, and other production-source writes are denied; `.codex/codex_claude_loop/` task files, child-thread delegate calls, and validation commands are allowed.
 - To disable loop mode, explicitly ask Codex to "disable codex-claude-loop loop mode" or "exit loop mode".
@@ -47,30 +51,31 @@ When the user explicitly asks to use Codex Claude Loop, the Codex main thread sh
 
 This repository is intended to be distributed as a Codex plugin marketplace. The marketplace file lives at `.agents/plugins/marketplace.json`, and the actual plugin lives under `plugins/codex-claude-loop/`.
 
-The steps below explicitly say where each command or prompt should be entered. Do not paste PowerShell commands into the Codex chat box, and do not paste natural-language requests for Codex AI into PowerShell.
+The steps below explicitly say where each command or prompt should be entered. Do not paste terminal commands into the Codex chat box, and do not paste natural-language requests for Codex AI into a terminal.
 
 ### Where to Run Things
 
 - `PowerShell terminal`: Windows Terminal, PowerShell 7, or regular PowerShell. Run commands like `codex --version`, `codex plugin marketplace add ...`, `codex plugin marketplace upgrade ...`, and `pwsh -File ...` here.
+- `macOS terminal`: Terminal or another terminal running `zsh`. Run `codex`, `python3`, marketplace commands, and `macos_scripts/*.sh` here.
 - `Codex Desktop chat box`: Send natural-language requests to Codex AI when you want Codex to inspect, install, or troubleshoot for you.
 - `Codex CLI interactive interface`: Run `codex` from PowerShell first, then type into the interactive Codex interface. Slash commands such as `/plugin install ...` may belong here; they are not PowerShell commands.
 - `Codex Desktop plugin list`: View, install, enable, or disable plugins. The exact entry name may vary slightly across Codex versions.
 
 ### Quick Start
 
-1. Check Codex CLI in a `PowerShell terminal`.
-2. Run the installation doctor in a `PowerShell terminal`.
-3. Add the marketplace in a `PowerShell terminal`.
+1. Check Codex CLI in a platform terminal.
+2. Run the platform repository check when working from a clone.
+3. Add the marketplace in a platform terminal.
 4. Install the plugin from the `Codex Desktop plugin list` or the `Codex CLI interactive interface`.
 5. Restart Codex Desktop or open a new session.
-6. Verify that the plugin is present in the new Codex session context from a `PowerShell terminal`.
+6. Verify that the plugin is present in the new Codex session context from a platform terminal.
 
 ### Method 1: Ask Codex AI to Install It
 
 If you do not want to install it manually, send this one-line prompt to the `Codex Desktop chat box` or the `Codex CLI interactive interface`. Codex AI should follow [AI_INSTALL.md](./AI_INSTALL.md) from this repository. Do not paste this prompt into PowerShell.
 
 ```text
-Please install or update https://github.com/zhbCloud/codex-claude-loop as a Windows-only Codex plugin in the current Codex environment, following the repository AI_INSTALL.md.
+Please install or update https://github.com/zhbCloud/codex-claude-loop as a Windows and macOS Codex plugin in the current Codex environment, following the repository AI_INSTALL.md.
 ```
 
 Codex may ask for confirmation before it changes `~/.codex/config.toml`, downloads marketplace data, or writes plugin cache files. Before approving, check whether Codex is about to run a PowerShell command, use a Codex plugin command, or modify files.
@@ -81,7 +86,7 @@ Codex may ask for confirmation before it changes `~/.codex/config.toml`, downloa
 - Codex CLI is installed.
 - Codex is logged in.
 - The machine can access GitHub.
-- Windows is required, and PowerShell 7+ is recommended.
+- Windows with PowerShell 7+, or macOS with `zsh` and Python 3.10+.
 - Claude CLI must be installed and logged in if you want the delegate runtime to actually call Claude.
 
 #### 0. Check Codex CLI
@@ -107,12 +112,19 @@ cd D:\Desktop\codex-claude-loop
 pwsh -NoProfile -File .\scripts\doctor.ps1
 ```
 
-The doctor checks the Windows requirement, Codex CLI availability, marketplace JSON, plugin layout, manifest path, skill path, README stale paths, and whether Codex can read the plugin through `plugin/read`.
+The PowerShell doctor checks the Windows environment, Codex CLI availability, marketplace JSON, plugin layout, manifest path, skill path, README stale paths, and whether Codex can read the plugin through `plugin/read`.
 
 For CI or repository-only validation, skip machine-specific Codex checks from a `PowerShell terminal`:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\doctor.ps1 -SkipCodexCli -SkipCodexRead
+```
+
+On macOS, the PowerShell doctor is not required. From a repository clone, validate the macOS wrappers and documentation contract instead:
+
+```zsh
+python3 ./scripts/test_macos_compatibility.py
+python3 ./scripts/test_documentation_contract.py
 ```
 
 #### 2. Add the Plugin Marketplace
@@ -161,6 +173,12 @@ Run this in a `PowerShell terminal`:
 codex debug prompt-input "verify codex-claude-loop is active" | Select-String "codex-claude-loop:codex-claude-loop"
 ```
 
+macOS equivalent:
+
+```zsh
+codex debug prompt-input "verify codex-claude-loop is active" | grep -F "codex-claude-loop:codex-claude-loop"
+```
+
 If the output includes something like this, the plugin is present in the new Codex session context:
 
 ```text
@@ -187,12 +205,12 @@ If you already installed `codex-claude-loop`, update the local marketplace and i
 ### Recommended Update Flow
 
 1. Close Codex Desktop so plugin cache files are not in use.
-2. Open a new `PowerShell terminal`.
+2. Open a new platform terminal.
 3. Run the marketplace upgrade command.
 4. Restart Codex Desktop or open a new session.
 5. Verify that the plugin is present in the new session context.
 
-Run this in a `PowerShell terminal`:
+Run this in a platform terminal:
 
 ```powershell
 codex plugin marketplace upgrade codex-claude-loop
@@ -206,6 +224,12 @@ Marketplace `codex-claude-loop` is already up to date.
 
 It is also normal for Codex to report that the marketplace was upgraded. Restart Codex Desktop after upgrading.
 
+### Cache Refresh Requirement
+
+Repository changes do not automatically refresh an already running Codex session or an already installed plugin cache. After upgrading the marketplace, you must restart Codex Desktop or open a new Codex session before relying on the new plugin behavior. This is especially important for `0.4.1` and newer, because schema v3 artifacts are only produced by the updated plugin runtime loaded into the new session.
+
+macOS wrapper support starts in `0.4.2`. Existing installations must run the marketplace upgrade and then restart Codex Desktop or open a new session before `macos_scripts/*.sh` can appear in the loaded plugin cache.
+
 ### Verify the Update
 
 Run this in a `PowerShell terminal`:
@@ -214,7 +238,17 @@ Run this in a `PowerShell terminal`:
 (codex debug prompt-input "verify codex-claude-loop is updated" | Select-String -Pattern "codex-claude-loop/[0-9]+\.[0-9]+\.[0-9]+" -AllMatches).Matches.Value
 ```
 
+macOS equivalent:
+
+```zsh
+codex debug prompt-input "verify codex-claude-loop is updated" | grep -Eo 'codex-claude-loop/[0-9]+\.[0-9]+\.[0-9]+' | head -n 1
+```
+
 If the output looks like `codex-claude-loop/<version>`, that version is present in the Codex session context.
+
+For the schema v3 contract release, verify that the loaded version is `codex-claude-loop/0.4.1` or newer. This release changes generated artifacts to schema v3 for workflow gates, reviewer evidence, and final-verifier acceptance, so restart Codex Desktop or open a new session after upgrading before relying on the new contract.
+
+For macOS support, verify that the loaded version is `codex-claude-loop/0.4.2` or newer.
 
 If the command prints a very long prompt instead of just the version string, the final `.Matches.Value` was probably omitted. Use the full command above to print only the matched version.
 
@@ -345,6 +379,13 @@ cd D:\your-project
 codex
 ```
 
+On macOS:
+
+```zsh
+cd ~/your-project
+codex
+```
+
 After entering the `Codex CLI interactive interface`, type a natural-language task:
 
 ```text
@@ -364,6 +405,12 @@ Run this in a `PowerShell terminal`:
 codex -C D:\your-project "Use codex-claude-loop to fix this bug: <describe the bug>"
 ```
 
+On macOS:
+
+```zsh
+codex -C ~/your-project "Use codex-claude-loop to fix this bug: <describe the bug>"
+```
+
 This starts one Codex task with a single prompt. For complex work, the interactive CLI or Codex App is usually better because Codex can clarify requirements, propose a plan, and wait for confirmation.
 
 #### Verify That CLI Loaded the Plugin
@@ -372,6 +419,12 @@ Run this in a `PowerShell terminal`:
 
 ```powershell
 codex debug prompt-input "Use codex-claude-loop to test plugin loading" | Select-String "codex-claude-loop:codex-claude-loop"
+```
+
+On macOS:
+
+```zsh
+codex debug prompt-input "Use codex-claude-loop to test plugin loading" | grep -F "codex-claude-loop:codex-claude-loop"
 ```
 
 If the output includes `codex-claude-loop:codex-claude-loop`, the Codex CLI new-session context can see the plugin skill.

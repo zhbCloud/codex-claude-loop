@@ -1,1 +1,6 @@
 RESUME_PROJECT_SUMMARY.md
+
+.codex/codex_claude_loop/
+__pycache__/
+*.pyc
+*.pyc.*

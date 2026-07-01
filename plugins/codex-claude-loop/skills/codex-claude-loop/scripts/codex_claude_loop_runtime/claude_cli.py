@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -8,6 +9,14 @@ from typing import Any
 
 from .common import DelegateError, has_required_headings, now_iso
 from .io_utils import read_json, write_json, write_text
+
+
+DEFAULT_CLAUDE_FALLBACK_PATHS = (
+    Path("/opt/homebrew/bin/claude"),
+    Path("/usr/local/bin/claude"),
+    Path.home() / ".npm-global" / "bin" / "claude",
+    Path.home() / ".local" / "bin" / "claude",
+)
 
 
 def build_claude_args(session_id: str, resume: bool, session_name: str, model: str, bypass_permissions: bool) -> list[str]:
@@ -29,6 +38,25 @@ def build_claude_args(session_id: str, resume: bool, session_name: str, model: s
     if bypass_permissions:
         args.append("--dangerously-skip-permissions")
     return args
+
+
+def resolve_claude_cli(
+    path: str | None = None,
+    fallback_paths: list[Path] | tuple[Path, ...] | None = None,
+) -> str:
+    resolved = shutil.which("claude", path=path)
+    if resolved:
+        return resolved
+
+    candidates = DEFAULT_CLAUDE_FALLBACK_PATHS if fallback_paths is None else fallback_paths
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            return str(candidate)
+
+    hint = " Ensure Claude CLI is installed and visible on PATH."
+    if os.name != "nt":
+        hint += " On macOS GUI sessions, restart Codex after installing Claude CLI, or ensure /opt/homebrew/bin or /usr/local/bin is available."
+    raise DelegateError(f"Claude CLI was not found on PATH.{hint}")
 
 
 def _extract_text(record: dict[str, Any]) -> list[str]:
@@ -73,9 +101,7 @@ def run_claude(
     bypass_permissions: bool,
     status_path: Path | None = None,
 ) -> dict[str, Any]:
-    claude = shutil.which("claude")
-    if not claude:
-        raise DelegateError("Claude CLI was not found on PATH.")
+    claude = resolve_claude_cli()
 
     args = build_claude_args(session_id, resume, session_name, model, bypass_permissions)
     assistant_texts: list[str] = []

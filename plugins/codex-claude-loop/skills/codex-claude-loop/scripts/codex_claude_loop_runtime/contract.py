@@ -8,7 +8,7 @@ from .io_utils import read_json
 DEFAULT_CONTRACT: dict[str, Any] = {
     "schemaVersion": 1,
     "invocationContract": "codex_claude_loop_workflow",
-    "artifactSchemaVersion": 2,
+    "artifactSchemaVersion": 3,
     "childThread": {"markerName": "CODEX_CLAUDE_LOOP_CHILD_THREAD", "markerValue": "1"},
     "workModes": ["auto", "fast", "strict"],
     "workerRoles": ["planner", "implementer", "researcher", "reviewer", "final-verifier"],
