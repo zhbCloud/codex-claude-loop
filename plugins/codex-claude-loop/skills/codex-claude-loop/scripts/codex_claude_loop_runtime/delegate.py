@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from .claude_cli import run_claude, write_startup_failure
+from .claude_cli import ClaudeProcessCleanupError, run_claude, write_startup_failure
 from .common import (
     ARTIFACT_SCHEMA_VERSION,
     CHILD_MARKER_NAME,
@@ -498,7 +498,14 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
         "childThreadMarkerValidated": True,
         "exitCode": None,
     }
+    if context.get("worker_pid") is not None:
+        status.update({
+            "workerPid": context["worker_pid"],
+            "workerLogPath": str(status_path.parent / f"worker_{run_id}.log"),
+            "workerErrorLogPath": str(status_path.parent / f"worker_{run_id}.err.log"),
+        })
     lease: SessionLease | None = None
+    release_lease = True
     exit_code = 1
     try:
         status.update({"status": "leasing", "phase": "leasing_session", "updatedAt": now_iso(), "heartbeatAt": now_iso()})
@@ -519,6 +526,7 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
         status.update(
             {
                 "status": "running",
+                "startedAt": now_iso(),
                 "phase": "claude_running" if not ns.dry_run else "dry_run",
                 "updatedAt": now_iso(),
                 "heartbeatAt": now_iso(),
@@ -641,8 +649,10 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
         print(f"Output: {output_path}")
         print(f"StatusPath: {status_path}")
         return exit_code
-    except Exception as exc:
-        write_startup_failure(output_path, str(exc))
+    except (Exception, KeyboardInterrupt) as exc:
+        release_lease = not isinstance(exc, ClaudeProcessCleanupError)
+        failure_message = "Claude execution interrupted." if isinstance(exc, KeyboardInterrupt) else str(exc)
+        write_startup_failure(output_path, failure_message)
         status.update(
             {
                 "status": "failed",
@@ -651,14 +661,14 @@ def execute_prepared(ns: argparse.Namespace | SimpleNamespace, context: dict[str
                 "updatedAt": now_iso(),
                 "heartbeatAt": now_iso(),
                 "exitCode": 1,
-                "failedReasons": [str(exc)],
+                "failedReasons": [failure_message],
             }
         )
         write_json(status_path, status)
         update_workflow_status(context, "failed")
         raise
     finally:
-        if lease is not None:
+        if lease is not None and release_lease:
             release_session(lease, fingerprint, ns.lease_ttl_seconds)
 
 
@@ -668,6 +678,7 @@ def run_worker(config_path: Path) -> int:
             f"Direct delegate invocation is forbidden. Run inside a Codex child thread with {CHILD_MARKER_NAME}={CHILD_MARKER_VALUE}."
         )
     ns, context = load_prepared_run(config_path)
+    context["worker_pid"] = os.getpid()
     return execute_prepared(ns, context)
 
 

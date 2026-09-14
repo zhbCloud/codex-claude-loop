@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -103,7 +104,49 @@ def test_strict_light_run_waits_for_full_validation() -> None:
         assert gate["gateStatus"] == "pending_full_validation"
 
 
+def test_prepared_worker_publishes_its_own_metadata() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        task = root / "task.md"
+        task.write_text("Do a dry run.", encoding="utf-8")
+        env = os.environ.copy()
+        env["CODEX_CLAUDE_LOOP_CHILD_THREAD"] = "1"
+        prepared = subprocess.run(
+            [sys.executable, "-B", str(DELEGATE), "--task-file", str(task), "--workflow-id", "worker-test",
+             "--task-id", "task", "--role", "implementer", "--session-key", "worker-test", "--work-mode", "fast",
+             "--artifact-root", str(root / "artifacts"), "--dry-run", "--prepare-only"],
+            cwd=root, env=env, text=True, capture_output=True, timeout=10,
+        )
+        assert prepared.returncode == 0, prepared.stderr
+        config_path = next((root / "artifacts").glob("config_*.json"))
+        config = read_json(config_path)
+        status_path = Path(config["statusPath"])
+        queued = read_json(status_path)
+        queued["startedAt"] = "2000-01-01T00:00:00Z"
+        status_path.write_text(json.dumps(queued), encoding="utf-8")
+        worker = subprocess.Popen(
+            [sys.executable, "-B", str(DELEGATE), "--worker-config", str(config_path)],
+            cwd=root, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = worker.communicate(timeout=10)
+            assert worker.returncode == 0, stderr + stdout
+            status = read_json(status_path)
+            assert status["status"] == "completed"
+            assert status["workerPid"] == worker.pid
+            assert status["workerLogPath"] == str(root / "artifacts" / f"worker_{config['runId']}.log")
+            assert status["workerErrorLogPath"] == str(root / "artifacts" / f"worker_{config['runId']}.err.log")
+            assert status["startedAt"] != queued["startedAt"]
+        finally:
+            if worker.poll() is None:
+                worker.kill()
+                worker.communicate(timeout=5)
+        wrapper = RUNTIME_ROOT.parent / "windows_scripts" / "delegate_to_claude.ps1"
+        assert "Set-Content -LiteralPath $statusPath" not in wrapper.read_text(encoding="utf-8")
+
+
 if __name__ == "__main__":
     test_fast_light_run_passes_gate()
     test_strict_light_run_waits_for_full_validation()
+    test_prepared_worker_publishes_its_own_metadata()
     print("ok")

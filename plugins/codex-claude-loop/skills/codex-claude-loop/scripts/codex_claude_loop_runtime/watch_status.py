@@ -51,6 +51,33 @@ def display_value(value: object) -> str:
     return str(value)
 
 
+def read_stream_tail(path: Path, line_count: int) -> list[str]:
+    if line_count <= 0:
+        return []
+    with path.open("rb") as stream:
+        position = stream.seek(0, 2)
+        tail = b""
+        block_size = 8192
+        while position > 0:
+            size = min(position, block_size)
+            position -= size
+            stream.seek(position)
+            tail = stream.read(size) + tail
+
+            # A suffix can start inside a UTF-8 character. Its first partial
+            # line is discarded unless we have reached the beginning of file.
+            prefix = 0
+            if position > 0:
+                while prefix < min(3, len(tail)) and tail[prefix] & 0xC0 == 0x80:
+                    prefix += 1
+            lines = tail[prefix:].decode("utf-8").splitlines()
+            if position == 0 or len(lines) > line_count:
+                return lines[-line_count:]
+            # Geometric growth keeps rescanning very long lines linear.
+            block_size *= 2
+    return []
+
+
 def status_lines(status: dict[str, Any], stream_tail_lines: int) -> list[str]:
     lines = [
         " ".join(
@@ -82,7 +109,7 @@ def status_lines(status: dict[str, Any], stream_tail_lines: int) -> list[str]:
         stream_path = Path(str(stream_path_value))
         if stream_path.is_file():
             lines.append("StreamTail:")
-            lines.extend(stream_path.read_text(encoding="utf-8").splitlines()[-stream_tail_lines:])
+            lines.extend(read_stream_tail(stream_path, stream_tail_lines))
     return lines
 
 

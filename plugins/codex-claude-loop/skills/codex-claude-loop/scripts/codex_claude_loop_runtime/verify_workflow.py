@@ -5,7 +5,9 @@ import posixpath
 from pathlib import Path
 from typing import Any
 
+from .common import STRICT_REVIEW_KINDS
 from .io_utils import read_json, read_text
+from .workflow import final_verifier_is_current, latest_task_run, review_is_current
 
 
 def default_artifact_root() -> Path:
@@ -63,32 +65,61 @@ def verify_workflow(root: Path, workflow_id: str) -> dict[str, Any]:
     final_verifier_missing = False
     parallel_scope_conflicts: list[str] = []
     missing_test_evidence: list[str] = []
+    structural_errors = False
+    latest_attempts: dict[tuple[str, str, str, str], str] = {}
+    seen_run_ids: set[str] = set()
+    for run in runs:
+        if not isinstance(run, dict) or not run.get("runId"):
+            problems.append("Run entry must be an object with a runId")
+            structural_errors = True
+            continue
+        run_id = str(run["runId"])
+        if run_id in seen_run_ids:
+            problems.append(f"Duplicate runId: {run_id}")
+            structural_errors = True
+        seen_run_ids.add(run_id)
+        if run.get("taskId"):
+            key = tuple(str(run.get(field) or "") for field in ("taskId", "role", "reviewForTaskId", "reviewKind"))
+            latest_attempts[key] = run_id
 
     for run in runs:
         if not isinstance(run, dict):
             continue
         run_id = str(run.get("runId") or "")
-        status_path = Path(str(run.get("statusPath") or ""))
+        status_path_value = str(run.get("statusPath") or "")
+        status_path = Path(status_path_value)
         status_value = str(run.get("status") or "")
 
         if not run_id:
             problems.append("Run entry missing runId")
             continue
-        if not status_path.exists():
+        if not status_path_value or not status_path.is_file():
             missing_status.append(run_id)
             continue
 
         status_doc = read_json(status_path)
+        if not isinstance(status_doc, dict):
+            problems.append(f"Status must be an object: {run_id}")
+            structural_errors = True
+            continue
         effective_status = str(status_doc.get("status") or status_value)
+        key = tuple(str(run.get(field) or "") for field in ("taskId", "role", "reviewForTaskId", "reviewKind"))
+        if run.get("taskId") and latest_attempts.get(key) != run_id and effective_status in {"completed", "failed"}:
+            # Keep history for auditing; only a terminal attempt can be superseded.
+            continue
         if effective_status == "failed":
             failed_runs.append(run_id)
         elif effective_status not in {"completed", "failed"}:
             running_runs.append(run_id)
         final_gate_path = Path(str(status_doc.get("finalGatePath") or root / f"final_gate_{run_id}.json"))
-        if not final_gate_path.exists():
+        if not final_gate_path.is_file():
             gate_missing_runs.append(run_id)
             continue
         gate_doc = read_json(final_gate_path)
+        if not isinstance(gate_doc, dict):
+            problems.append(f"Final gate must be an object: {run_id}")
+            structural_errors = True
+            continue
         gate_status = str(gate_doc.get("gateStatus") or "")
         if gate_status == "failed":
             gate_failed_runs.append(run_id)
@@ -97,6 +128,7 @@ def verify_workflow(root: Path, workflow_id: str) -> dict[str, Any]:
 
     if not runs:
         problems.append("Workflow has no runs")
+        structural_errors = True
     if missing_status:
         problems.append("Missing status files for runs: " + ", ".join(missing_status))
     if failed_runs:
@@ -110,14 +142,16 @@ def verify_workflow(root: Path, workflow_id: str) -> dict[str, Any]:
     tasks = workflow.get("tasks") if isinstance(workflow.get("tasks"), dict) else {}
     strict_tasks = [task for task in tasks.values() if isinstance(task, dict) and task.get("workMode") == "strict"]
     for task in strict_tasks:
-        if task.get("role") == "implementer" and task.get("reviewDecision") != "accepted":
+        if task.get("role") == "implementer" and (
+            task.get("reviewDecision") != "accepted"
+            or ("reviews" in task and not all(review_is_current(workflow, task, kind) for kind in STRICT_REVIEW_KINDS))
+        ):
             strict_pending_tasks.append(str(task.get("taskId") or ""))
-    final_verifier = workflow.get("finalVerifier") if isinstance(workflow.get("finalVerifier"), dict) else {}
     final_acceptance = workflow.get("finalAcceptance") if isinstance(workflow.get("finalAcceptance"), dict) else {}
     final_verifier_required = final_acceptance.get("finalVerifierRequired")
     if final_verifier_required is None:
         final_verifier_required = any(task.get("role") == "implementer" and "reviews" in task for task in strict_tasks)
-    if strict_tasks and final_verifier_required and final_verifier.get("reviewDecision") != "accepted":
+    if strict_tasks and final_verifier_required and not final_verifier_is_current(workflow):
         final_verifier_missing = True
     if strict_pending_tasks:
         problems.append("Strict implementer tasks pending accepted spec/quality reviews: " + ", ".join(strict_pending_tasks))
@@ -152,16 +186,15 @@ def verify_workflow(root: Path, workflow_id: str) -> dict[str, Any]:
         tests = [str(item).strip() for item in (task.get("tests") if isinstance(task.get("tests"), list) else []) if str(item).strip()]
         if not tests:
             continue
-        run_ids = [str(item) for item in (task.get("runs") if isinstance(task.get("runs"), list) else [])]
-        latest_run_id = str(task.get("lastRunId") or (run_ids[-1] if run_ids else ""))
+        latest_run_id = latest_task_run(task)
         run_doc = run_index.get(latest_run_id, {})
         config_path = Path(str(run_doc.get("configPath") or ""))
         output_path = Path(str(run_doc.get("outputPath") or ""))
-        config_doc = read_json(config_path) if config_path.exists() else {}
+        config_doc = read_json(config_path) if config_path.is_file() else {}
         runtime_options = config_doc.get("runtimeOptions") if isinstance(config_doc.get("runtimeOptions"), dict) else {}
         if runtime_options.get("dryRun"):
             continue
-        output_text = read_text(output_path) if output_path.exists() else ""
+        output_text = read_text(output_path) if output_path.is_file() else ""
         missing = [item for item in tests if item not in output_text]
         if missing:
             missing_test_evidence.append(f"{task.get('taskId')}: " + "; ".join(missing))
@@ -170,7 +203,8 @@ def verify_workflow(root: Path, workflow_id: str) -> dict[str, Any]:
 
     state = "running"
     if (
-        failed_runs
+        structural_errors
+        or failed_runs
         or missing_status
         or gate_failed_runs
         or gate_missing_runs

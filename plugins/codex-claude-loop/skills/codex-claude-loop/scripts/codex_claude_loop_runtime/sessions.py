@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -9,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import DelegateError, now_iso
-from .io_utils import read_json, write_json
+from .io_utils import file_lock, read_json, write_json
 
 
 @dataclass
@@ -22,6 +21,7 @@ class SessionLease:
     state_path: Path
     lock_path: Path
     run_id: str
+    activity_lock: contextlib.ExitStack
 
 
 class AtomicLock:
@@ -30,39 +30,30 @@ class AtomicLock:
         self.ttl_seconds = ttl_seconds
         self.wait_seconds = wait_seconds
         self.acquired = False
+        self._context: contextlib.AbstractContextManager[None] | None = None
 
     def __enter__(self) -> "AtomicLock":
-        deadline = time.monotonic() + max(0, self.wait_seconds)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        while True:
-            try:
-                fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(f"pid={os.getpid()} acquiredAt={now_iso()}\n")
-                self.acquired = True
-                return self
-            except FileExistsError:
-                if self._is_stale():
-                    with contextlib.suppress(FileNotFoundError):
-                        self.path.unlink()
-                    continue
-                if time.monotonic() >= deadline:
-                    raise DelegateError(f"Timed out waiting for session lock: {self.path}")
-                time.sleep(0.25)
+        self._context = file_lock(self.path, timeout_seconds=self.wait_seconds)
+        try:
+            self._context.__enter__()
+        except TimeoutError as exc:
+            raise DelegateError(f"Timed out waiting for session lock: {self.path}") from exc
+        self.acquired = True
+        return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if self.acquired:
-            with contextlib.suppress(FileNotFoundError):
-                self.path.unlink()
+        if self.acquired and self._context is not None:
+            self.acquired = False
+            self._context.__exit__(exc_type, exc, tb)
 
-    def _is_stale(self) -> bool:
-        if self.ttl_seconds <= 0:
-            return False
-        try:
-            age = time.time() - self.path.stat().st_mtime
-        except FileNotFoundError:
-            return False
-        return age > self.ttl_seconds
+
+def _hold_activity_lock(stack: contextlib.ExitStack, state_root: Path, session_key: str, slot_name: str) -> bool:
+    path = state_root / f"{session_key}.{slot_name}.active.lock"
+    try:
+        stack.enter_context(file_lock(path, timeout_seconds=0))
+    except TimeoutError:
+        return False
+    return True
 
 
 def _new_state(session_key: str) -> dict[str, Any]:
@@ -108,12 +99,7 @@ def _leased(slot: dict[str, Any], ttl_seconds: int) -> bool:
         ts = datetime.fromisoformat(str(leased_at).replace("Z", "+00:00")).timestamp()
     except ValueError:
         return False
-    if time.time() - ts > ttl_seconds:
-        slot["status"] = "available"
-        slot["leaseRunId"] = None
-        slot["leasedAt"] = None
-        return False
-    return True
+    return time.time() - ts <= ttl_seconds
 
 
 def acquire_session(
@@ -128,12 +114,12 @@ def acquire_session(
 ) -> SessionLease:
     state_path = state_root / f"{session_key}.json"
     lock_path = state_root / f"{session_key}.lock"
-    with AtomicLock(lock_path, lease_ttl_seconds, lease_wait_seconds):
+    with AtomicLock(lock_path, lease_ttl_seconds, lease_wait_seconds), contextlib.ExitStack() as activity_lock:
         state = _read_state(state_path, session_key)
         state["updatedAt"] = now_iso()
         if session_mode in {"PrimaryReuse", "PrimaryAnchor"}:
             slot = state["primary"]
-            if _leased(slot, lease_ttl_seconds):
+            if _leased(slot, lease_ttl_seconds) or not _hold_activity_lock(activity_lock, state_root, session_key, "primary"):
                 raise DelegateError(f"Primary Claude session is already leased for SessionKey={session_key}")
             resume = bool(slot.get("sessionId") and slot.get("validatedAt"))
             session_id = str(slot["sessionId"]) if resume else str(uuid.uuid4())
@@ -142,7 +128,7 @@ def acquire_session(
                 slot["pendingSessionId"] = session_id
             slot.update({"status": "leased", "leaseRunId": run_id, "leasedAt": now_iso()})
             write_json(state_path, state)
-            return SessionLease(session_key, session_mode, session_id, resume, "primary", state_path, lock_path, run_id)
+            return SessionLease(session_key, session_mode, session_id, resume, "primary", state_path, lock_path, run_id, activity_lock.pop_all())
 
         pool = state["parallelPool"]
         max_parallel = max(1, max_parallel)
@@ -150,7 +136,16 @@ def acquire_session(
         for index, slot in enumerate(pool):
             if not _leased(slot, lease_ttl_seconds):
                 candidates.append((index, slot, slot.get("lastTaskFingerprint") == fingerprint))
-        if not candidates and len(pool) < max_parallel:
+        candidates.sort(key=lambda item: (0 if item[2] else 1, item[1].get("lastUsedAt") or ""))
+        selected: tuple[int, dict[str, Any]] | None = None
+        for index, slot, _ in candidates:
+            if _hold_activity_lock(activity_lock, state_root, session_key, f"parallel-{index}"):
+                selected = (index, slot)
+                break
+        if selected is None and len(pool) < max_parallel:
+            index = len(pool)
+            if not _hold_activity_lock(activity_lock, state_root, session_key, f"parallel-{index}"):
+                raise DelegateError(f"No available ParallelPool slots for SessionKey={session_key}; maxParallel={max_parallel}")
             slot = {
                 "sessionId": None,
                 "pendingSessionId": None,
@@ -163,11 +158,10 @@ def acquire_session(
                 "lastTaskFingerprint": fingerprint,
             }
             pool.append(slot)
-            candidates.append((len(pool) - 1, slot, True))
-        if not candidates:
+            selected = (index, slot)
+        if selected is None:
             raise DelegateError(f"No available ParallelPool slots for SessionKey={session_key}; maxParallel={max_parallel}")
-        candidates.sort(key=lambda item: (0 if item[2] else 1, item[1].get("lastUsedAt") or ""))
-        index, slot, _ = candidates[0]
+        index, slot = selected
         resume = bool(slot.get("sessionId") and slot.get("validatedAt"))
         session_id = str(slot["sessionId"]) if resume else str(uuid.uuid4())
         if not resume:
@@ -182,7 +176,7 @@ def acquire_session(
             }
         )
         write_json(state_path, state)
-        return SessionLease(session_key, session_mode, session_id, resume, f"parallel-{index}", state_path, lock_path, run_id)
+        return SessionLease(session_key, session_mode, session_id, resume, f"parallel-{index}", state_path, lock_path, run_id, activity_lock.pop_all())
 
 
 def commit_session(lease: SessionLease, fingerprint: str, lease_ttl_seconds: int) -> None:
@@ -210,7 +204,7 @@ def commit_session(lease: SessionLease, fingerprint: str, lease_ttl_seconds: int
 
 
 def release_session(lease: SessionLease, fingerprint: str, lease_ttl_seconds: int) -> None:
-    with contextlib.suppress(Exception):
+    with lease.activity_lock, contextlib.suppress(Exception):
         with AtomicLock(lease.lock_path, lease_ttl_seconds, 30):
             state = _read_state(lease.state_path, lease.session_key)
             now = now_iso()

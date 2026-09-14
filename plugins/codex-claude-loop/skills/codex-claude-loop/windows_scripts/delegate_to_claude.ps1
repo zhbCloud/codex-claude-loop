@@ -179,13 +179,8 @@ if ($StartOnly) {
   $workerArgs += @($pythonScript, "--worker-config", $configPath)
   $process = Start-Process -FilePath $pythonExe -ArgumentList $workerArgs -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -PassThru -RedirectStandardOutput $workerLog -RedirectStandardError $workerErrLog
 
-  if ($statusPath -and (Test-Path -LiteralPath $statusPath)) {
-    $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
-    $status | Add-Member -NotePropertyName workerPid -NotePropertyValue $process.Id -Force
-    $status | Add-Member -NotePropertyName workerLogPath -NotePropertyValue $workerLog -Force
-    $status | Add-Member -NotePropertyName workerErrorLogPath -NotePropertyValue $workerErrLog -Force
-    $status | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $statusPath -Encoding utf8
-  }
+  # The worker owns status publication, including PID and log paths. Writing
+  # here after Start-Process could replace a newer worker status snapshot.
 
   $payload = [ordered]@{
     state = "started"

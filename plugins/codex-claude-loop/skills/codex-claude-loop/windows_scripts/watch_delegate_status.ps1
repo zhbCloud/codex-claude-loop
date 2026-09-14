@@ -54,6 +54,28 @@ function Read-Workflow {
   return Get-Content -LiteralPath $workflowPath -Raw | ConvertFrom-Json
 }
 
+function Read-WorkflowRuns {
+  param(
+    [string]$Root,
+    [string]$WorkflowId
+  )
+  $workflow = Read-Workflow -Root $Root -Id $WorkflowId
+  foreach ($run in @($workflow.runs)) {
+    $current = @{}
+    foreach ($property in $run.PSObject.Properties) {
+      $current[$property.Name] = $property.Value
+    }
+    $statusPath = [string]$run.statusPath
+    if ($statusPath -and (Test-Path -LiteralPath $statusPath -PathType Leaf)) {
+      $statusDoc = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+      foreach ($property in $statusDoc.PSObject.Properties) {
+        $current[$property.Name] = $property.Value
+      }
+    }
+    [pscustomobject]$current
+  }
+}
+
 function Format-StatusLine {
   param($Status)
   function Format-Value {
@@ -108,32 +130,21 @@ function Write-WorkflowSummary {
   param(
     [string]$Root,
     [string]$WorkflowId,
+    [object[]]$Runs,
     [int]$TailLines
   )
-  $workflow = Read-Workflow -Root $Root -Id $WorkflowId
-  $runs = @($workflow.runs)
-  $total = $runs.Count
+  $total = $Runs.Count
   $completed = 0
   $failed = 0
   $running = 0
 
   Write-Output "WorkflowId=$WorkflowId TotalRuns=$total"
 
-  foreach ($run in $runs) {
+  foreach ($run in $Runs) {
     $runId = [string]$run.runId
     $statusValue = [string]$run.status
     $taskId = [string]$run.taskId
     $role = [string]$run.role
-    $statusPath = [string]$run.statusPath
-
-    if ($statusPath -and (Test-Path -LiteralPath $statusPath -PathType Leaf)) {
-      $statusDoc = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
-      $statusValue = [string]$statusDoc.status
-      if ($TailLines -gt 0) {
-        Write-Status -Root $Root -Status $statusDoc -TailLines $TailLines
-        continue
-      }
-    }
 
     if ($statusValue -eq "completed") {
       $completed++
@@ -143,7 +154,11 @@ function Write-WorkflowSummary {
       $running++
     }
 
-    Write-Output "RunId=$runId TaskId=$taskId Role=$role Status=$statusValue"
+    if ($TailLines -gt 0 -and $run.statusPath) {
+      Write-Status -Root $Root -Status $run -TailLines $TailLines
+    } else {
+      Write-Output "RunId=$runId TaskId=$taskId Role=$role Status=$statusValue"
+    }
   }
 
   Write-Output "WorkflowSummary Completed=$completed Running=$running Failed=$failed"
@@ -156,10 +171,10 @@ $maxInterval = [Math]::Max($interval, $MaxIntervalSeconds)
 
 while ($true) {
   if ($WorkflowId) {
-    Write-WorkflowSummary -Root $root -WorkflowId $WorkflowId -TailLines $StreamTailLines
+    $runs = @(Read-WorkflowRuns -Root $root -WorkflowId $WorkflowId)
+    Write-WorkflowSummary -Root $root -WorkflowId $WorkflowId -Runs $runs -TailLines $StreamTailLines
 
-    $workflow = Read-Workflow -Root $root -Id $WorkflowId
-    $statuses = @($workflow.runs | ForEach-Object { $_.status })
+    $statuses = @($runs | ForEach-Object { $_.status })
     $hasFailed = $statuses -contains "failed"
     $allFinished = ($statuses.Count -gt 0) -and (@($statuses | Where-Object { $_ -notin @("completed", "failed") }).Count -eq 0)
 

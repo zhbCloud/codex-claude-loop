@@ -8,10 +8,6 @@ const LOOP_MODE_RELATIVE_PATH = path.join(".codex", "codex_claude_loop", "loop_m
 const SHELL_TOOL_NAMES = new Set(["bash", "shell_command", "functions.shell_command"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "functions.apply_patch"]);
 const PARALLEL_TOOL_NAMES = new Set(["multi_tool_use.parallel", "parallel"]);
-const LOOP_MODE_ALLOWED_PREFIXES = [
-  ".codex/codex_claude_loop/",
-  ".codex\\codex_claude_loop\\"
-];
 
 const FALLBACK_CONTEXT = [
   "codex-claude-loop subagent gate:",
@@ -235,9 +231,11 @@ function deny(reason) {
   };
 }
 
-function isAllowedLoopModePath(filePath) {
-  const normalized = String(filePath).replaceAll("\\", "/").replace(/^["']|["']$/g, "").replace(/^\.\//, "");
-  return LOOP_MODE_ALLOWED_PREFIXES.some((prefix) => normalized.toLowerCase().startsWith(prefix.replaceAll("\\", "/").toLowerCase()));
+function isAllowedLoopModePath(filePath, root) {
+  const allowedRoot = path.join(root, ".codex", "codex_claude_loop");
+  const target = path.resolve(root, String(filePath));
+  const relative = path.relative(allowedRoot, target);
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 function prop(input, snakeName, camelName) {
@@ -273,27 +271,43 @@ function hasDirectClaudeCommand(serialized) {
   return /(?:^|[\s;&|"'`])(?:\.\/|\.\\|[\w:/\\.-]*[/\\])?claude(?:\.cmd|\.exe)?(?=$|[\s;&|"'`])/i.test(serialized);
 }
 
-function isDelegateCommand(serialized) {
-  return has(DELEGATE_ENTRYPOINT, serialized)
-    && has(/CODEX_CLAUDE_LOOP_CHILD_THREAD\s*(?:=|:)\s*["']?1["']?/i, serialized);
+function shellControlText(value) {
+  const text = String(value);
+  let quote = "";
+  let controlText = "";
+  for (const character of text) {
+    if (quote) {
+      if (character === quote) quote = "";
+      // Escaping differs between supported shells; inspect ambiguous text conservatively.
+      else if (quote === '"' && (character === "\\" || character === "`")) return text;
+      controlText += " ";
+    } else if (character === "'" || character === '"') {
+      quote = character;
+      controlText += " ";
+    } else {
+      controlText += character;
+    }
+  }
+  return quote ? text : controlText;
 }
 
 function isKnownReadOnlyOrValidationCommand(serialized) {
   const text = String(serialized).trim();
+  if (/[;&|>\r\n]/.test(shellControlText(text))) return false;
   return /^(?:rg|git\s+(?:status|diff|show|log|ls-files)|node\s+--check|python(?:\s+-B)?\s+scripts[\\/].*test|npm\s+run\s+build|pnpm\s+run\s+build|yarn\s+build|pwsh\s+-NoProfile\s+-File\s+.*verify_)/i.test(text);
 }
 
 function shellLooksLikeWrite(serialized) {
   const text = String(serialized);
   return /(?:^|[\s;&|"'`])(?:Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Move-Item|Copy-Item|Rename-Item|rm|del|mv|cp|tee|npm\s+install|pnpm\s+install|yarn\s+install)\b/i.test(text)
-    || /(?:^|[\s;&|])(?:cat|echo|printf)\b[\s\S]*(?:^|[^=])>{1,2}(?![>&])/m.test(text)
+    || />(?!&(?:\d+|-)(?=$|[\s;&|]))/.test(shellControlText(text))
     || /(?:^|[\s;&|"'`])sed\s+-i\b/i.test(text);
 }
 
 function extractPatchPaths(payload) {
   const serialized = stringify(payload);
   const paths = [];
-  for (const match of serialized.matchAll(/\*\*\* (?:Add|Update|Delete) File:\s*([^\r\n]+)/g)) {
+  for (const match of serialized.matchAll(/\*\*\* (?:(?:Add|Update|Delete) File|Move to):[ \t]*([^\r\n]+)/g)) {
     paths.push(match[1].trim());
   }
   return paths;
@@ -310,11 +324,10 @@ function loopModeWriteProblem(input, toolName, toolInput) {
   const serialized = stringify(toolInput);
 
   if (SPAWN_TOOL_NAMES.has(toolName)) return "";
-  if (isDelegateCommand(serialized)) return "";
 
   if (PATCH_TOOL_NAMES.has(toolName)) {
     const paths = extractPatchPaths(toolInput);
-    const blocked = paths.filter((item) => !isAllowedLoopModePath(item));
+    const blocked = paths.filter((item) => !isAllowedLoopModePath(item, root));
     if (blocked.length > 0) {
       return `loop mode is active: main thread cannot directly edit production files (${blocked.join(", ")}). Delegate implementation or rework to Claude.`;
     }
@@ -322,8 +335,9 @@ function loopModeWriteProblem(input, toolName, toolInput) {
   }
 
   if (SHELL_TOOL_NAMES.has(toolName)) {
-    if (isKnownReadOnlyOrValidationCommand(String(prop(toolInput, "command", "command") || serialized))) return "";
-    if (shellLooksLikeWrite(serialized)) {
+    const command = String(prop(toolInput, "command", "command") || serialized);
+    if (isKnownReadOnlyOrValidationCommand(command)) return "";
+    if (shellLooksLikeWrite(command)) {
       return "loop mode is active: main thread shell write commands are blocked. Write task files under .codex/codex_claude_loop or delegate implementation to Claude.";
     }
     return "";

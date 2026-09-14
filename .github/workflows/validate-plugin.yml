@@ -16,6 +16,37 @@ jobs:
         shell: pwsh
         run: ./scripts/doctor.ps1 -SkipCodexCli -SkipCodexRead
 
+      - name: Run offline Python regression tests
+        shell: pwsh
+        run: |
+          # Explicit allowlist: test_real_write_smoke.py invokes real Claude and is excluded.
+          $tests = @(
+            'test_contract_schema.py',
+            'test_repo_hygiene.py',
+            'test_documentation_contract.py',
+            'test_task_contract.py',
+            'test_scope_gate.py',
+            'test_report_contract.py',
+            'test_session_commit.py',
+            'test_delegate_work_modes.py',
+            'test_workflow_verify_gates.py',
+            'test_workflow_persistence.py',
+            'test_claude_process_lifecycle.py',
+            'test_watch_delegate_status.py',
+            'test_macos_compatibility.py'
+          )
+          foreach ($test in $tests) {
+            Write-Host "Running $test"
+            python -B "./scripts/$test"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Run loop mode gate regression tests
+        shell: pwsh
+        run: |
+          node ./scripts/test_loop_mode_guard.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   validate-macos:
     name: Validate macOS wrappers
     runs-on: macos-latest
@@ -25,16 +56,46 @@ jobs:
 
       - name: Check zsh syntax
         shell: zsh {0}
-        run: zsh -n plugins/codex-claude-loop/skills/codex-claude-loop/macos_scripts/*.sh
+        run: |
+          set -euo pipefail
+          for script in plugins/codex-claude-loop/skills/codex-claude-loop/macos_scripts/*.sh; do
+            zsh -n "$script"
+          done
 
       - name: Smoke test shared runtime wrappers
         shell: zsh {0}
         run: |
+          set -euo pipefail
           ./plugins/codex-claude-loop/skills/codex-claude-loop/macos_scripts/validate_delegate_task.sh --help
           ./plugins/codex-claude-loop/skills/codex-claude-loop/macos_scripts/watch_delegate_status.sh --help
 
-      - name: Run macOS compatibility tests
+      - name: Run offline Python regression tests
+        shell: pwsh
         run: |
-          python3 ./scripts/test_macos_compatibility.py
-          python3 ./scripts/test_watch_delegate_status.py
-          python3 ./scripts/test_documentation_contract.py
+          # Explicit allowlist: test_real_write_smoke.py invokes real Claude and is excluded.
+          $tests = @(
+            'test_contract_schema.py',
+            'test_repo_hygiene.py',
+            'test_documentation_contract.py',
+            'test_task_contract.py',
+            'test_scope_gate.py',
+            'test_report_contract.py',
+            'test_session_commit.py',
+            'test_delegate_work_modes.py',
+            'test_workflow_verify_gates.py',
+            'test_workflow_persistence.py',
+            'test_claude_process_lifecycle.py',
+            'test_watch_delegate_status.py',
+            'test_macos_compatibility.py'
+          )
+          foreach ($test in $tests) {
+            Write-Host "Running $test"
+            python3 -B "./scripts/$test"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Run loop mode gate regression tests
+        shell: pwsh
+        run: |
+          node ./scripts/test_loop_mode_guard.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
