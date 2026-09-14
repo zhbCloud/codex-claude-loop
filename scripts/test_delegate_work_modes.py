@@ -107,6 +107,9 @@ def test_strict_light_run_waits_for_full_validation() -> None:
 def test_prepared_worker_publishes_its_own_metadata() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        (root / "path-alias").mkdir()
+        root = root / "path-alias" / ".."
+        assert str(root) != str(root.resolve())
         task = root / "task.md"
         task.write_text("Do a dry run.", encoding="utf-8")
         env = os.environ.copy()
@@ -134,8 +137,10 @@ def test_prepared_worker_publishes_its_own_metadata() -> None:
             status = read_json(status_path)
             assert status["status"] == "completed"
             assert status["workerPid"] == worker.pid
-            assert status["workerLogPath"] == str(root / "artifacts" / f"worker_{config['runId']}.log")
-            assert status["workerErrorLogPath"] == str(root / "artifacts" / f"worker_{config['runId']}.err.log")
+            for field, suffix in (("workerLogPath", ".log"), ("workerErrorLogPath", ".err.log")):
+                expected = (root / "artifacts" / f"worker_{config['runId']}{suffix}").resolve()
+                actual = Path(status[field]).resolve()
+                assert actual == expected, f"{field}: {actual} != {expected}"
             assert status["startedAt"] != queued["startedAt"]
         finally:
             if worker.poll() is None:

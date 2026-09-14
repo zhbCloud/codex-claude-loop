@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,8 @@ def test_claude_cli_resolution_uses_path_before_macos_fallbacks() -> None:
         fallback_claude = fallback_dir / ("claude.exe" if os.name == "nt" else "claude")
         path_claude.write_text("", encoding="utf-8")
         fallback_claude.write_text("", encoding="utf-8")
+        for executable in (path_claude, fallback_claude):
+            executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
 
         resolved = resolve_claude_cli(
             path=str(path_dir),
